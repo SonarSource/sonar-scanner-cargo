@@ -67,6 +67,11 @@ jobs:
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml <<'EOF'
+          [registry]
+          # Repox requires authentication, and Cargo refuses to talk to an authenticated registry
+          # without an explicit credential provider. The token comes from the environment.
+          global-credential-providers = ["cargo:token"]
+
           [registries.repox]
           index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
 
@@ -140,6 +145,9 @@ jobs:
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml <<EOF
+          [registry]
+          global-credential-providers = ["cargo:token"]
+
           [registries.repox]
           index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
 
