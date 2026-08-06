@@ -106,6 +106,20 @@ jobs:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
         run: cargo test --locked
 
+      # The MSRV is a promise to anyone running `cargo install`, so compile it rather than assert it.
+      # The version comes from Cargo.toml so there is only one place to change it.
+      - name: Verify the declared MSRV
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: |
+          msrv=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)
+          if [[ -z "$msrv" ]]; then
+            echo "::error::Cargo.toml declares no rust-version"
+            exit 1
+          fi
+          echo "Declared MSRV: $msrv"
+          mise x "rust@$msrv" -- cargo check --locked --all-targets
+
       # A published .crate is immutable, so review what would go into it on every build. This is
       # the control that stops credentials or internal material leaking into a public artifact.
       - name: Inspect the package contents
