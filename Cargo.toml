@@ -2,7 +2,8 @@
 name = "cargo-sonar-scanner"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+# Verified by CI, not asserted: `let` chains put the floor at 1.88.
+rust-version = "1.88"
 description = "Run SonarQube Server and SonarQube Cloud analysis from Cargo."
 # Sonar Source-Available License v1.0 — not an SPDX identifier, so the text ships with the crate.
 license-file = "LICENSE.txt"

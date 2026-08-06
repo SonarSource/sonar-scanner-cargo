@@ -44,7 +44,10 @@ $ cargo clippy --all-targets -- -D warnings
 
 The Rust toolchain is pinned in `rust-toolchain.toml`, which rustup and IDEs pick up
 automatically. CI provisions the same version through [mise](https://mise.jdx.dev) (`mise.toml`),
-and fails the build if the two disagree. MSRV is 1.85 (edition 2024).
+and fails the build if the two disagree.
+
+The MSRV in `Cargo.toml` (`rust-version`) is compiled by CI on every build, so it is a verified
+claim rather than an aspiration. Raising it is a deliberate act: change `rust-version` and say why.
 
 New source files must carry the header in [`license-header.txt`](license-header.txt); CI enforces
 it.
