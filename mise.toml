@@ -1,0 +1,5 @@
+[tools]
+# Keep in sync with the channel in rust-toolchain.toml; CI verifies that the two agree.
+# rust-toolchain.toml stays the source of truth for rustup and for IDEs, mise is what
+# provisions the toolchain on the minimal CI runners.
+rust = "1.96.0"
