@@ -125,6 +125,46 @@ jobs:
       - name: Inspect the package contents
         run: cargo package --list --locked
 
+  # Analysis of this repository itself. Dependency analysis (SCA) runs as part of the SonarQube
+  # scan, which is what the organisation-wide `check-sca` workflow waits for — it polls the
+  # project's default branch and the pull request, so a PR analysis is enough to satisfy it.
+  #
+  # Deliberately independent of `build`: a failing lint should not hide the analysis result, and
+  # the scan needs no Rust toolchain — the analyzers ship with the scanner engine.
+  sonar:
+    runs-on: sonar-xs
+    name: SonarQube Analysis
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history, so that SCM blame and new-code detection work.
+          fetch-depth: 0
+
+      - name: Vault
+        id: secrets
+        uses: SonarSource/vault-action-wrapper@0a3114fe1230b784c35b53b099f9ab1f1e538cc7 # 3.5.0
+        with:
+          secrets: |
+            development/kv/data/next url | SONAR_HOST_URL;
+            development/kv/data/next token | SONAR_TOKEN;
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          # Needed to decorate the pull request.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ fromJSON(steps.secrets.outputs.vault).SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.analysis.pipeline=${{ github.run_id }}
+            -Dsonar.analysis.repository=${{ github.repository }}
+
   # Publishing a crate is not a snapshot operation: crate versions are immutable, so a given
   # version can be pushed exactly once. Until the release pipeline and the versioning scheme are
   # settled (SCANCARGO-2), this job stays disabled — it runs only once the CARGO_REPOX_REPO
