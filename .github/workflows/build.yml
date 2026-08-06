@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   build:
     # For guidance on runner selection, visit:
@@ -31,18 +34,124 @@ jobs:
       # - All secrets MUST come from Vault using SonarSource/vault-action-wrapper
       # - Never use GitHub Secrets for sensitive data
 
-      # TODO: Add your build steps here
-      #
-      # For ready-to-use SonarSource GitHub Actions with real-world examples
-      # and production-ready implementations, visit:
-      # https://github.com/SonarSource/ci-github-actions
-      #
-      # For caching, use SonarSource/gh-action_cache@v1
-      # It automatically chooses GitHub Actions cache (public) or S3 cache (private)
-      #
-      # Real-world reference repositories:
-      # - sonar-dummy: Private Java/Maven
-      # - sonar-dummy-gradle-oss: Public Java/Gradle
-      # - sonar-dummy-python-oss: Public Python/Poetry
-      # - sonar-dummy-js: Public NodeJS/Yarn
-      #
+      # The sonar-* runners are minimal, so the Rust toolchain is provisioned by mise rather
+      # than by the system package manager.
+      - name: Set up tools
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.7.7
+
+      - name: Check the pinned Rust version is consistent
+        run: |
+          mise_version=$(sed -n 's/^rust *= *"\(.*\)"/\1/p' mise.toml)
+          toolchain_version=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          if [[ "$mise_version" != "$toolchain_version" ]]; then
+            echo "::error::mise.toml pins Rust $mise_version but rust-toolchain.toml pins $toolchain_version"
+            exit 1
+          fi
+          echo "Rust $mise_version"
+          cargo --version
+          rustc --version
+
+      - name: Vault
+        id: secrets
+        uses: SonarSource/vault-action-wrapper@0a3114fe1230b784c35b53b099f9ab1f1e538cc7 # 3.5.0
+        with:
+          secrets: |
+            development/artifactory/token/{REPO_OWNER_NAME_DASH}-public-reader access_token | ARTIFACTORY_ACCESS_TOKEN;
+
+      # Dependencies resolve through Repox rather than crates.io directly. This file is generated
+      # here and never committed: committing it would break external contributors, who have no
+      # Repox credentials.
+      - name: Route crates.io through Repox
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [registries.repox]
+          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
+
+          [source.crates-io]
+          replace-with = "repox"
+          EOF
+
+      - name: Check the formatting
+        run: cargo fmt --all --check
+
+      - name: Check the license headers
+        run: |
+          missing=$(grep -rL 'Sonar Source-Available License Version 1' --include='*.rs' src tests || true)
+          if [[ -n "$missing" ]]; then
+            echo "::error::Missing the license-header.txt header:"
+            echo "$missing"
+            exit 1
+          fi
+
+      - name: Lint
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Build
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo build --locked
+
+      - name: Test
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo test --locked
+
+      # A published .crate is immutable, so review what would go into it on every build. This is
+      # the control that stops credentials or internal material leaking into a public artifact.
+      - name: Inspect the package contents
+        run: cargo package --list --locked
+
+  # Publishing a crate is not a snapshot operation: crate versions are immutable, so a given
+  # version can be pushed exactly once. Until the release pipeline and the versioning scheme are
+  # settled (RUST-593), this job stays disabled — it runs only once the CARGO_REPOX_REPO
+  # repository variable names the target Repox registry.
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/master' && vars.CARGO_REPOX_REPO != ''
+    runs-on: sonar-xs
+    name: Deploy
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up tools
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.7.7
+
+      - name: Vault
+        id: secrets
+        uses: SonarSource/vault-action-wrapper@0a3114fe1230b784c35b53b099f9ab1f1e538cc7 # 3.5.0
+        with:
+          secrets: |
+            development/artifactory/token/{REPO_OWNER_NAME_DASH}-qa-deployer access_token | ARTIFACTORY_DEPLOY_TOKEN;
+
+      - name: Configure the Repox registries
+        env:
+          CARGO_REPOX_REPO: ${{ vars.CARGO_REPOX_REPO }}
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<EOF
+          [registries.repox]
+          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
+
+          [registries.repox-deploy]
+          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/${CARGO_REPOX_REPO}/index/"
+
+          [source.crates-io]
+          replace-with = "repox"
+          EOF
+
+      - name: Publish to Repox
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
+          CARGO_REGISTRIES_REPOX_DEPLOY_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
+        run: cargo publish --registry repox-deploy --locked

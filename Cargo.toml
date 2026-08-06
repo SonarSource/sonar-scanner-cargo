@@ -1,0 +1,37 @@
+[package]
+name = "cargo-sonar-scanner"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Run SonarQube Server and SonarQube Cloud analysis from Cargo."
+# Sonar Source-Available License v1.0 — not an SPDX identifier, so the text ships with the crate.
+license-file = "LICENSE.txt"
+readme = "README.md"
+repository = "https://github.com/SonarSource/sonar-scanner-cargo"
+documentation = "https://docs.rs/cargo-sonar-scanner"
+categories = ["development-tools", "development-tools::cargo-plugins"]
+keywords = ["sonarqube", "sonar", "static-analysis", "code-quality", "cargo-subcommand"]
+publish = ["crates-io"]
+# A published .crate is public and immutable: list what goes in it explicitly, rather than
+# excluding what must stay out and hoping the list stays complete.
+include = [
+    "/src",
+    "/tests",
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE.txt",
+    "/NOTICE.txt",
+    "/rust-toolchain.toml",
+    "/rustfmt.toml",
+]
+
+[[bin]]
+name = "cargo-sonar-scanner"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+
+[profile.release]
+strip = true
