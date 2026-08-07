@@ -70,10 +70,19 @@ fn has_trailing_continuation(line: &str) -> bool {
 
 fn parse_entry(line: &str) -> Option<(String, String)> {
     let chars: Vec<char> = line.chars().collect();
-    let mut index = 0;
-    let mut key = String::new();
+    let (key, key_end) = scan_key(&chars);
+    if key.is_empty() {
+        return None;
+    }
+    let value: String = chars[skip_separator(&chars, key_end)..].iter().collect();
+    Some((key, unescape(value.trim_end())))
+}
 
-    // The key ends at the first unescaped separator or whitespace.
+/// The key runs to the first unescaped separator or whitespace. Returns it with the offset of the
+/// character that ended it.
+fn scan_key(chars: &[char]) -> (String, usize) {
+    let mut key = String::new();
+    let mut index = 0;
     while index < chars.len() {
         let c = chars[index];
         if c == '\\' && index + 1 < chars.len() {
@@ -87,11 +96,11 @@ fn parse_entry(line: &str) -> Option<(String, String)> {
         key.push(c);
         index += 1;
     }
-    if key.is_empty() {
-        return None;
-    }
+    (key, index)
+}
 
-    // Skip the separator and the whitespace around it.
+/// Skip an optional `=` or `:` separator and any whitespace around it.
+fn skip_separator(chars: &[char], mut index: usize) -> usize {
     while index < chars.len() && chars[index].is_whitespace() {
         index += 1;
     }
@@ -101,9 +110,7 @@ fn parse_entry(line: &str) -> Option<(String, String)> {
             index += 1;
         }
     }
-
-    let value: String = chars[index..].iter().collect();
-    Some((key, unescape(value.trim_end())))
+    index
 }
 
 fn unescape(value: &str) -> String {

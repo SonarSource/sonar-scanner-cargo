@@ -212,26 +212,7 @@ pub fn resolve(cli: &Cli, env: &BTreeMap<String, String>, cwd: &Path, start_time
     let user_home = resolve_user_home(&preliminary, env, cwd)?;
 
     let mut loaded_files = Vec::new();
-    let project_file = project_base_dir.join(PROJECT_PROPERTIES_FILE);
-    let user_file = user_home.join(USER_PROPERTIES_FILE);
-    // Lowest precedence first: the user file sits below the project file, both below the layers above.
-    let mut file_layers = Vec::new();
-    for (source, path) in [(Source::UserFile, &user_file), (Source::ProjectFile, &project_file)] {
-        if let Some(properties) = files::load_if_present(path)? {
-            debug!("Loaded {} properties from {}", properties.len(), path.display());
-            loaded_files.push(path.clone());
-            file_layers.push((source, properties));
-        } else {
-            debug!("No configuration file at {}", path.display());
-        }
-    }
-    // The manifest is the Cargo-native project configuration, so it outranks the generic
-    // `sonar-project.properties` — the same order pysonar applies to `[tool.sonar]`.
-    if let Some((path, properties)) = manifest::load_if_present(&project_base_dir)? {
-        debug!("Loaded {} properties from {}", properties.len(), path.display());
-        loaded_files.push(path);
-        file_layers.push((Source::Manifest, properties));
-    }
+    let file_layers = load_file_layers(&project_base_dir, &user_home, &mut loaded_files)?;
     layers.splice(0..0, file_layers);
 
     let mut properties = flatten(&layers);
@@ -242,7 +223,46 @@ pub fn resolve(cli: &Cli, env: &BTreeMap<String, String>, cwd: &Path, start_time
         }
     }
 
-    // Properties owned by the bootstrapper, which the user cannot override.
+    apply_scanner_properties(&mut properties, &mut origins, start_time_ms);
+    apply_defaults(&mut properties, &mut origins, &project_base_dir, &user_home);
+    register_secrets(&properties);
+
+    Ok(Configuration { properties, origins, user_home, project_base_dir, loaded_files })
+}
+
+/// The project- and user-level configuration files, lowest precedence first.
+///
+/// The manifest is the Cargo-native project configuration, so it outranks the generic
+/// `sonar-project.properties` — the same order pysonar applies to `[tool.sonar]`. The user file
+/// sits below both.
+fn load_file_layers(
+    project_base_dir: &Path,
+    user_home: &Path,
+    loaded_files: &mut Vec<PathBuf>,
+) -> Result<Vec<(Source, Properties)>> {
+    let mut file_layers = Vec::new();
+    let user_file = user_home.join(USER_PROPERTIES_FILE);
+    let project_file = project_base_dir.join(PROJECT_PROPERTIES_FILE);
+
+    for (source, path) in [(Source::UserFile, &user_file), (Source::ProjectFile, &project_file)] {
+        if let Some(properties) = files::load_if_present(path)? {
+            debug!("Loaded {} properties from {}", properties.len(), path.display());
+            loaded_files.push(path.clone());
+            file_layers.push((source, properties));
+        } else {
+            debug!("No configuration file at {}", path.display());
+        }
+    }
+    if let Some((path, properties)) = manifest::load_if_present(project_base_dir)? {
+        debug!("Loaded {} properties from {}", properties.len(), path.display());
+        loaded_files.push(path);
+        file_layers.push((Source::Manifest, properties));
+    }
+    Ok(file_layers)
+}
+
+/// Properties owned by the bootstrapper, which the user cannot override.
+fn apply_scanner_properties(properties: &mut Properties, origins: &mut BTreeMap<String, Source>, start_time_ms: u128) {
     let owned = [
         (APP, SCANNER_APP.to_string()),
         (APP_VERSION, env!("CARGO_PKG_VERSION").to_string()),
@@ -255,23 +275,31 @@ pub fn resolve(cli: &Cli, env: &BTreeMap<String, String>, cwd: &Path, start_time
         properties.set(key, value);
         origins.insert(key.to_string(), Source::Bootstrapper);
     }
+}
 
-    // Properties the bootstrapper contributes on the project's behalf, all user-overridable.
-    let defaults = [
-        (PROJECT_BASE_DIR, project_base_dir.display().to_string()),
-        (USER_HOME, user_home.display().to_string()),
-        (AUTOCONFIG_DISABLED, "false".to_string()),
-    ];
-    for (key, value) in defaults {
+/// Properties the bootstrapper contributes on the project's behalf, all user-overridable.
+fn apply_defaults(
+    properties: &mut Properties,
+    origins: &mut BTreeMap<String, Source>,
+    project_base_dir: &Path,
+    user_home: &Path,
+) {
+    let base_dir = project_base_dir.display().to_string();
+    let home = user_home.display().to_string();
+    for (key, value) in [(PROJECT_BASE_DIR, &base_dir), (USER_HOME, &home), (AUTOCONFIG_DISABLED, &"false".to_string())]
+    {
         if !properties.contains(key) {
             properties.set(key, value);
             origins.insert(key.to_string(), Source::Bootstrapper);
         }
     }
-    // Normalise the two paths that were resolved to absolute form above.
-    properties.set(PROJECT_BASE_DIR, project_base_dir.display().to_string());
-    properties.set(USER_HOME, user_home.display().to_string());
+    // Both paths were resolved to absolute form above, so overwrite whatever the user wrote.
+    properties.set(PROJECT_BASE_DIR, base_dir);
+    properties.set(USER_HOME, home);
+}
 
+/// Teach the logger every credential in the property set, and warn about deprecated ones.
+fn register_secrets(properties: &Properties) {
     for key in SENSITIVE_KEYS {
         if let Some(value) = properties.get_non_blank(key) {
             crate::logging::register_secret(value);
@@ -285,8 +313,6 @@ pub fn resolve(cli: &Cli, env: &BTreeMap<String, String>, cwd: &Path, start_time
              '{TOKEN}' takes precedence; remove the deprecated properties."
         );
     }
-
-    Ok(Configuration { properties, origins, user_home, project_base_dir, loaded_files })
 }
 
 /// Merge layers lowest precedence first.
