@@ -26,6 +26,7 @@ mod payload;
 mod platform;
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -115,10 +116,29 @@ fn log_resolved(config: &Configuration) {
 }
 
 /// Testing hook: write the engine payload instead of executing an analysis.
+///
+/// The payload deliberately carries the real token, because that is what the engine receives, so
+/// the file is created readable only by its owner rather than at the process umask.
 fn dump_to_file(config: &Configuration, path: &str) -> Result<()> {
     let payload = ScannerPayload::from_properties(&config.properties);
-    std::fs::write(path, payload.to_pretty_json())
+    write_private(Path::new(path), payload.to_pretty_json().as_bytes())
         .map_err(|source| ScannerError::FileWrite { path: path.into(), source })?;
     info!("Scanner properties written to {path}");
     Ok(())
+}
+
+#[cfg(unix)]
+fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    // `mode` only applies when the file is created, so tighten an existing one too.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(contents)
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, contents)
 }
