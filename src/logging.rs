@@ -22,10 +22,10 @@
 //! needs no mapping.
 //!
 //! Nothing in this crate writes to stdout or stderr directly: every line goes through the logger,
-//! so a value registered with [`register_secret`] cannot reach an output stream.
+//! so a value registered with [`register_secrets`] cannot reach an output stream.
 
 use std::io::Write;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
@@ -74,36 +74,38 @@ pub fn set_verbose(verbose: bool) {
     log::set_max_level(if verbose { LevelFilter::Debug } else { LevelFilter::Info });
 }
 
-fn secrets() -> &'static Mutex<Vec<String>> {
-    static SECRETS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
-    SECRETS.get_or_init(|| Mutex::new(Vec::new()))
-}
+/// Values registered once, after the configuration is resolved, and only read afterwards — so a
+/// write-once cell is enough and the read path needs no lock.
+static SECRETS: OnceLock<Vec<String>> = OnceLock::new();
 
-/// Register a value that must never appear in any output stream.
-///
-/// Very short values are ignored: redacting them would mangle unrelated text without protecting
+/// Shorter values are ignored: redacting them would mangle unrelated text without protecting
 /// anything meaningful.
-pub fn register_secret(secret: &str) {
-    let secret = secret.trim();
-    if secret.len() < 4 {
-        return;
-    }
-    let mut guard = secrets().lock().unwrap_or_else(|e| e.into_inner());
-    if !guard.iter().any(|s| s == secret) {
-        guard.push(secret.to_string());
-    }
-}
+const MIN_SECRET_LEN: usize = 4;
 
-#[cfg(test)]
-pub fn clear_secrets() {
-    secrets().lock().unwrap_or_else(|e| e.into_inner()).clear();
+/// Register the values that must never appear in an output stream.
+///
+/// Called once, from configuration resolution. Later calls are ignored, which is what keeps the
+/// read path lock-free.
+pub fn register_secrets(values: impl IntoIterator<Item = String>) {
+    let secrets = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| value.len() >= MIN_SECRET_LEN)
+        .collect();
+    let _ = SECRETS.set(secrets);
 }
 
 /// Replace every registered secret with [`REDACTED`].
 pub fn redact(message: &str) -> String {
-    let guard = secrets().lock().unwrap_or_else(|e| e.into_inner());
+    match SECRETS.get() {
+        Some(secrets) => redact_with(secrets, message),
+        None => message.to_string(),
+    }
+}
+
+fn redact_with(secrets: &[String], message: &str) -> String {
     let mut redacted = message.to_string();
-    for secret in guard.iter() {
+    for secret in secrets {
         if redacted.contains(secret.as_str()) {
             redacted = redacted.replace(secret.as_str(), REDACTED);
         }
@@ -115,25 +117,16 @@ pub fn redact(message: &str) -> String {
 mod tests {
     use super::*;
 
-    // The secret registry is process-global, so these tests must not run concurrently.
-    static LOCK: Mutex<()> = Mutex::new(());
-
     #[test]
     fn redacts_every_occurrence_of_a_registered_secret() {
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_secrets();
-        register_secret("squ_deadbeefcafe");
-        let redacted = redact("token=squ_deadbeefcafe and again squ_deadbeefcafe");
+        let secrets = vec!["squ_deadbeefcafe".to_string()];
+        let redacted = redact_with(&secrets, "token=squ_deadbeefcafe and again squ_deadbeefcafe");
         assert_eq!(redacted, format!("token={REDACTED} and again {REDACTED}"));
-        clear_secrets();
     }
 
     #[test]
     fn ignores_values_too_short_to_be_credentials() {
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_secrets();
-        register_secret("us");
-        assert_eq!(redact("sonar.region=us"), "sonar.region=us");
-        clear_secrets();
+        assert!("us".len() < MIN_SECRET_LEN);
+        assert_eq!(redact_with(&[], "sonar.region=us"), "sonar.region=us");
     }
 }

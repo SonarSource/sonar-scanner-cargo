@@ -209,7 +209,7 @@ pub fn resolve(cli: &Cli, env: &BTreeMap<String, String>, cwd: &Path, start_time
 
     apply_scanner_properties(&mut properties, &mut origins, start_time_ms);
     apply_defaults(&mut properties, &mut origins, &project_base_dir, &user_home);
-    register_secrets(&properties);
+    guard_credentials(&properties);
 
     Ok(Configuration { properties, origins, user_home, project_base_dir, loaded_files })
 }
@@ -259,27 +259,28 @@ fn apply_defaults(
     project_base_dir: &Path,
     user_home: &Path,
 ) {
-    let base_dir = project_base_dir.display().to_string();
-    let home = user_home.display().to_string();
-    for (key, value) in [(PROJECT_BASE_DIR, &base_dir), (USER_HOME, &home), (AUTOCONFIG_DISABLED, &"false".to_string())]
-    {
+    // Both directories are recorded in absolute form, whatever the user wrote. The origin stays
+    // theirs when they supplied the key: the value is still theirs, only normalised.
+    for (key, directory) in [(PROJECT_BASE_DIR, project_base_dir), (USER_HOME, user_home)] {
         if !properties.contains(key) {
-            properties.set(key, value);
             origins.insert(key.to_string(), Source::Bootstrapper);
         }
+        properties.set(key, directory.display().to_string());
     }
-    // Both paths were resolved to absolute form above, so overwrite whatever the user wrote.
-    properties.set(PROJECT_BASE_DIR, base_dir);
-    properties.set(USER_HOME, home);
+    // Engine-side auto-configuration became opt-in in SCANENGINE-542, so its own default is `true`.
+    // The bootstrapper turns it on for the user, because a Cargo project would otherwise derive
+    // nothing and the whole point of this scanner would be lost. Still overridable.
+    if !properties.contains(AUTOCONFIG_DISABLED) {
+        properties.set(AUTOCONFIG_DISABLED, "false");
+        origins.insert(AUTOCONFIG_DISABLED.to_string(), Source::Bootstrapper);
+    }
 }
 
 /// Teach the logger every credential in the property set, and warn about deprecated ones.
-fn register_secrets(properties: &Properties) {
-    for key in SENSITIVE_KEYS {
-        if let Some(value) = properties.get_non_blank(key) {
-            crate::logging::register_secret(value);
-        }
-    }
+fn guard_credentials(properties: &Properties) {
+    crate::logging::register_secrets(
+        SENSITIVE_KEYS.iter().filter_map(|key| properties.get_non_blank(key)).map(str::to_string),
+    );
     if properties.get_non_blank(TOKEN).is_some()
         && (properties.get_non_blank("sonar.login").is_some() || properties.get_non_blank("sonar.password").is_some())
     {
@@ -310,8 +311,9 @@ fn resolve_base_dir(properties: &Properties, cwd: &Path) -> PathBuf {
     }
 }
 
-/// The scanner home directory, always absolute: it is written back into the property set and handed
-/// to the engine, which must not have to guess what a relative path was relative to.
+/// The scanner home directory: `sonar.userHome` if set, otherwise `~/.sonar` as the guidelines
+/// require. Always absolute, because it is written back into the property set and handed to the
+/// engine, which must not have to guess what a relative path was relative to.
 fn resolve_user_home(properties: &Properties, env: &BTreeMap<String, String>, cwd: &Path) -> Result<PathBuf> {
     if let Some(configured) = properties.get_non_blank(USER_HOME) {
         return Ok(absolutize(Path::new(configured), cwd));
