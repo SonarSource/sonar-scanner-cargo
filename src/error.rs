@@ -31,6 +31,9 @@ pub enum ScannerError {
     #[error("{var} is not a valid JSON object of string properties: {message}")]
     InvalidJsonParams { var: String, message: String },
 
+    #[error("Invalid Sonar configuration in {path}: {message}")]
+    InvalidManifestConfig { path: PathBuf, message: String },
+
     #[error("Unable to determine the current directory: {0}")]
     CurrentDir(std::io::Error),
 

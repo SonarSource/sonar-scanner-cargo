@@ -27,7 +27,64 @@ The binary is called `cargo-sonar-scanner`; once it is on `PATH`, Cargo resolves
 $ cargo sonar-scanner --help
 ```
 
-Analysis parameters are Sonar properties, set with `-Dkey=value` or with the `--sonar-*` options.
+Analysis parameters are Sonar properties. Set them with `-Dkey=value`, with the `--sonar-*`
+options, with environment variables, or in `Cargo.toml`.
+
+## Configuring the analysis in `Cargo.toml`
+
+The Cargo-native place to configure the analysis is the `[package.metadata.sonar]` table — the
+table Cargo reserves for third-party tools and otherwise ignores completely:
+
+```toml
+[package]
+name = "my-crate"
+version = "0.1.0"
+
+[package.metadata.sonar]
+project-key = "my-org_my-crate"
+host-url = "https://sonarqube.example.com"
+exclusions = ["vendor/**"]
+
+[package.metadata.sonar.scanner]
+java-opts = "-Xmx1g"
+```
+
+resolves to:
+
+```
+sonar.projectKey=my-org_my-crate
+sonar.host.url=https://sonarqube.example.com
+sonar.exclusions=vendor/**
+sonar.scanner.javaOpts=-Xmx1g
+```
+
+In a **virtual workspace** — a root `Cargo.toml` with no `[package]` — use
+`[workspace.metadata.sonar]` instead. If a manifest has both tables, `[package.metadata.sonar]`
+wins key by key, so a workspace root can hold shared settings and a member can override one of
+them.
+
+Only this one table is read, and only from the manifest in the base directory. The scanner does not
+otherwise interpret `Cargo.toml`: workspace membership, targets, source layout and inherited fields
+are derived by the scanner engine during the analysis.
+
+### Key naming
+
+| You write | It becomes |
+|---|---|
+| `project-key = "x"` | `sonar.projectKey=x` |
+| a nested table, `[package.metadata.sonar.scanner] java-opts = "…"` | `sonar.scanner.javaOpts=…` |
+| `exclusions = ["a/**", "b/**"]` | `sonar.exclusions=a/**,b/**` |
+| `verbose = true`, `connect-timeout = 30` | `sonar.verbose=true`, `…connectTimeout=30` |
+| `"sonar.cpd.exclusions" = "…"` | `sonar.cpd.exclusions=…` — verbatim |
+
+Bare keys are kebab-case and get a `sonar.` prefix; nested tables become dotted segments. Three
+properties whose real names are not camel-cased have aliases: `host-url` → `sonar.host.url`,
+`user-home` → `sonar.userHome`, `project-base-dir` → `sonar.projectBaseDir`. Anything the
+convention cannot express can be written as a quoted, fully-qualified property name.
+
+> **Do not put your token in `Cargo.toml`.** It is committed, and for a library crate it is
+> published inside the `.crate` archive on crates.io, where it cannot be deleted. The scanner warns
+> if it finds one. Use `SONAR_TOKEN` instead.
 
 ## Output streams
 

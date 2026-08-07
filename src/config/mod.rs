@@ -22,6 +22,7 @@
 pub mod env;
 pub mod files;
 pub mod json_params;
+pub mod manifest;
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Iter;
@@ -138,6 +139,7 @@ pub enum Source {
     CommandLine,
     Environment,
     JsonParams,
+    Manifest,
     ProjectFile,
     UserFile,
     Bootstrapper,
@@ -149,6 +151,7 @@ impl Source {
             Source::CommandLine => "command line",
             Source::Environment => "environment",
             Source::JsonParams => "JSON params",
+            Source::Manifest => "Cargo.toml",
             Source::ProjectFile => "project properties file",
             Source::UserFile => "user properties file",
             Source::Bootstrapper => "bootstrapper",
@@ -214,6 +217,10 @@ pub fn resolve(cli: &Cli, env: &BTreeMap<String, String>, cwd: &Path, start_time
 }
 
 /// The project- and user-level configuration files, lowest precedence first.
+///
+/// The manifest is the Cargo-native project configuration, so it outranks the generic
+/// `sonar-project.properties` — the same order pysonar applies to `[tool.sonar]`. The user file
+/// sits below both.
 fn load_file_layers(
     project_base_dir: &Path,
     user_home: &Path,
@@ -231,6 +238,11 @@ fn load_file_layers(
         } else {
             debug!("No configuration file at {}", path.display());
         }
+    }
+    if let Some((path, properties)) = manifest::load_if_present(project_base_dir)? {
+        debug!("Loaded {} properties from {}", properties.len(), path.display());
+        loaded_files.push(path);
+        file_layers.push((Source::Manifest, properties));
     }
     Ok(file_layers)
 }
@@ -371,6 +383,41 @@ mod tests {
             resolve_with(&[], &[("SONAR_SCANNER_JSON_PARAMS", r#"{"sonar.projectKey":"from-json"}"#)], dir.path());
         assert_eq!(config.properties.get("sonar.projectKey"), Some("from-json"));
         assert_eq!(config.origin_of("sonar.projectKey"), Source::JsonParams);
+    }
+
+    #[test]
+    fn the_manifest_beats_the_project_file() {
+        let dir = tempdir();
+        write(dir.path().join(PROJECT_PROPERTIES_FILE), "sonar.projectKey=from-properties\nsonar.sources=src\n");
+        write(dir.path().join(manifest::MANIFEST_FILE), "[package.metadata.sonar]\nproject-key = \"from-manifest\"\n");
+
+        let config = resolve_with(&[], &[], dir.path());
+        assert_eq!(config.properties.get("sonar.projectKey"), Some("from-manifest"));
+        assert_eq!(config.origin_of("sonar.projectKey"), Source::Manifest);
+        // A key only the properties file defines still applies.
+        assert_eq!(config.properties.get("sonar.sources"), Some("src"));
+        assert_eq!(config.origin_of("sonar.sources"), Source::ProjectFile);
+    }
+
+    #[test]
+    fn json_params_beat_the_manifest() {
+        let dir = tempdir();
+        write(dir.path().join(manifest::MANIFEST_FILE), "[package.metadata.sonar]\nproject-key = \"from-manifest\"\n");
+        let config =
+            resolve_with(&[], &[("SONAR_SCANNER_JSON_PARAMS", r#"{"sonar.projectKey":"from-json"}"#)], dir.path());
+        assert_eq!(config.properties.get("sonar.projectKey"), Some("from-json"));
+    }
+
+    #[test]
+    fn the_manifest_can_configure_the_connection() {
+        let dir = tempdir();
+        write(
+            dir.path().join(manifest::MANIFEST_FILE),
+            "[package.metadata.sonar]\nhost-url = \"https://sq.example.com\"\norganization = \"my-org\"\n",
+        );
+        let config = resolve_with(&[], &[], dir.path());
+        assert_eq!(config.properties.get(HOST_URL), Some("https://sq.example.com"));
+        assert_eq!(config.properties.get("sonar.organization"), Some("my-org"));
     }
 
     #[test]
