@@ -203,6 +203,14 @@ fn dump_to_file_writes_the_engine_payload() {
     assert!(payload.contains(r#""value": "my-crate""#), "{payload}");
     // The engine needs the real token, so the payload — unlike any log — carries it.
     assert!(payload.contains(FAKE_TOKEN), "{payload}");
+
+    // Which is why the file must not be readable by anyone else on a shared host.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&dump).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "dump file mode is {mode:o}");
+    }
 }
 
 #[test]
