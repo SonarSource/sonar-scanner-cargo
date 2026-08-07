@@ -75,7 +75,10 @@ fn parse_entry(line: &str) -> Option<(String, String)> {
         return None;
     }
     let value: String = chars[skip_separator(&chars, key_end)..].iter().collect();
-    Some((key, unescape(value.trim_end())))
+    // Trailing whitespace is significant: `java.util.Properties` strips it before the value but
+    // keeps it after, and `key=value\ ` is a deliberate trailing space. `str::lines` has already
+    // removed the line terminator, including the `\r` of a CRLF file.
+    Some((key, unescape(&value)))
 }
 
 /// The key runs to the first unescaped separator or whitespace. Returns it with the offset of the
@@ -186,6 +189,25 @@ mod tests {
     fn decodes_escapes() {
         let properties = parse(r"key=a\tb\nc\u00e9");
         assert_eq!(properties.get("key"), Some("a\tb\nc\u{e9}"));
+    }
+
+    #[test]
+    fn keeps_trailing_whitespace_in_a_value() {
+        // `java.util.Properties` skips whitespace before the value and preserves it after.
+        let properties = parse("sonar.projectName=  My Crate   \n");
+        assert_eq!(properties.get("sonar.projectName"), Some("My Crate   "));
+    }
+
+    #[test]
+    fn keeps_an_escaped_trailing_space() {
+        let properties = parse(r"key=value\ ");
+        assert_eq!(properties.get("key"), Some("value "));
+    }
+
+    #[test]
+    fn strips_the_carriage_return_of_a_crlf_file() {
+        let properties = parse("sonar.projectKey=my-crate\r\n");
+        assert_eq!(properties.get("sonar.projectKey"), Some("my-crate"));
     }
 
     #[test]
