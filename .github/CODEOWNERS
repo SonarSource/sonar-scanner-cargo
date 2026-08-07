@@ -1,2 +1,7 @@
 # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
-* @sonarsource/code-quality-ci-experience-squad
+#
+# Ownership is deliberately narrow. The repository is developed by the squad that owns the scanner
+# itself, so a blanket `*` rule would request a review from the CI experience squad on every pull
+# request and hold it behind an approval they have no reason to be asked for. Only this file is
+# owned, so that changes to the ownership rules themselves still need their sign-off.
+/.github/CODEOWNERS @sonarsource/code-quality-ci-experience-squad
