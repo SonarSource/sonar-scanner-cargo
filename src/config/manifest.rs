@@ -78,7 +78,7 @@ pub fn load_if_present(base_dir: &Path) -> Result<Option<(PathBuf, Properties)>>
         if properties.contains(key) {
             warn!(
                 "'{key}' is set in {}. Credentials do not belong in a manifest that is committed \
-                 and published; use the SONAR_TOKEN environment variable instead.",
+                 and published; set it in the environment instead.",
                 path.display()
             );
         }
