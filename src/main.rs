@@ -23,9 +23,10 @@ mod logging;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use log::{debug, error, info};
+
 use crate::cli::Cli;
 use crate::error::{Result, ScannerError};
-use crate::logging::{log_debug, log_error, log_info};
 
 /// Exit code for a failed bootstrap, matching the other scanners.
 const FAILURE: u8 = 1;
@@ -33,29 +34,29 @@ const FAILURE: u8 = 1;
 fn main() -> ExitCode {
     let start_time_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or_default();
     let cli = Cli::parse_argv(std::env::args_os());
-    logging::set_verbose(cli.verbose);
+    logging::init(cli.verbose);
 
     match run(&cli, start_time_ms) {
         Ok(code) => code,
-        Err(error) => {
-            log_error!("{error}");
-            let mut source = std::error::Error::source(&error);
+        Err(failure) => {
+            error!("{failure}");
+            let mut source = std::error::Error::source(&failure);
             while let Some(cause) = source {
-                log_error!("Caused by: {cause}");
+                error!("Caused by: {cause}");
                 source = cause.source();
             }
-            log_error!("EXECUTION FAILURE");
+            error!("EXECUTION FAILURE");
             ExitCode::from(FAILURE)
         }
     }
 }
 
 fn run(cli: &Cli, start_time_ms: u128) -> Result<ExitCode> {
-    log_info!("SonarScanner for Cargo {}", env!("CARGO_PKG_VERSION"));
-    log_debug!("Bootstrap start time: {start_time_ms}");
+    info!("SonarScanner for Cargo {}", env!("CARGO_PKG_VERSION"));
+    debug!("Bootstrap start time: {start_time_ms}");
 
-    for (key, _) in cli.defines()? {
-        log_debug!("Property defined on the command line: {key}");
+    for (key, _) in &cli.define {
+        debug!("Property defined on the command line: {key}");
     }
 
     // Milestones M1 to M3 are not implemented yet.

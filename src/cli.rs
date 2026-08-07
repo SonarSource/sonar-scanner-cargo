@@ -18,8 +18,6 @@ use std::ffi::OsString;
 
 use clap::Parser;
 
-use crate::error::{Result, ScannerError};
-
 /// Run SonarQube Server and SonarQube Cloud analysis on a Cargo project.
 ///
 /// All analysis parameters are Sonar properties. They can be set with `-Dkey=value`, with the
@@ -34,8 +32,8 @@ use crate::error::{Result, ScannerError};
 )]
 pub struct Cli {
     /// Define a Sonar property, repeatable (e.g. -Dsonar.projectKey=my-crate)
-    #[arg(short = 'D', long = "define", value_name = "key=value")]
-    pub define: Vec<String>,
+    #[arg(short = 'D', long = "define", value_name = "key=value", value_parser = parse_define)]
+    pub define: Vec<(String, String)>,
 
     /// Authentication token (sonar.token)
     #[arg(long, value_name = "TOKEN")]
@@ -83,25 +81,19 @@ impl Cli {
     ///
     /// Cargo runs external subcommands as `cargo-sonar-scanner sonar-scanner <args…>`; the binary
     /// must behave identically when invoked directly as `cargo-sonar-scanner <args…>`.
-    pub fn parse_argv<I, T>(argv: I) -> Self
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<OsString> + Clone,
-    {
+    pub fn parse_argv(argv: impl IntoIterator<Item = impl Into<OsString> + Clone>) -> Self {
         Self::parse_from(strip_cargo_subcommand(argv))
-    }
-
-    /// The `-Dkey=value` pairs, validated.
-    pub fn defines(&self) -> Result<Vec<(&str, &str)>> {
-        self.define.iter().map(|define| split_define(define)).collect()
     }
 }
 
-fn strip_cargo_subcommand<I, T>(argv: I) -> Vec<OsString>
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
-{
+/// Drop the subcommand name that Cargo passes to an external subcommand.
+///
+/// clap removes `argv[0]`, the binary name, and nothing else. Cargo invokes external subcommands
+/// as `cargo-sonar-scanner sonar-scanner <args…>`, so the subcommand name arrives as `argv[1]` —
+/// a Cargo convention that clap has no knowledge of. clap's cookbook does offer a cargo-subcommand
+/// pattern built on a wrapper enum, but it makes the `sonar-scanner` argument mandatory, and the
+/// binary has to keep working when it is run directly as `cargo-sonar-scanner <args…>`.
+fn strip_cargo_subcommand(argv: impl IntoIterator<Item = impl Into<OsString> + Clone>) -> Vec<OsString> {
     let mut argv: Vec<OsString> = argv.into_iter().map(Into::into).collect();
     if argv.len() > 1 && argv[1] == "sonar-scanner" {
         argv.remove(1);
@@ -110,10 +102,10 @@ where
 }
 
 /// `key=value` — an empty value is legal (`-Dsonar.token=`), an empty key is not.
-fn split_define(define: &str) -> Result<(&str, &str)> {
+fn parse_define(define: &str) -> Result<(String, String), String> {
     match define.split_once('=') {
-        Some((key, value)) if !key.trim().is_empty() => Ok((key.trim(), value)),
-        _ => Err(ScannerError::InvalidDefine(define.to_string())),
+        Some((key, value)) if !key.trim().is_empty() => Ok((key.trim().to_string(), value.to_string())),
+        _ => Err("expected key=value, for example sonar.projectKey=my-crate".to_string()),
     }
 }
 
@@ -151,15 +143,21 @@ mod tests {
             "sonar.verbose=true",
         ]);
         assert_eq!(cli.sonar_token.as_deref(), Some("from-option"));
-        assert_eq!(cli.defines().unwrap(), [("sonar.projectKey", "my-crate"), ("sonar.verbose", "true")]);
+        assert_eq!(
+            cli.define,
+            [
+                ("sonar.projectKey".to_string(), "my-crate".to_string()),
+                ("sonar.verbose".to_string(), "true".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn accepts_an_empty_value_but_rejects_a_missing_key() {
-        assert_eq!(split_define("sonar.token=").unwrap(), ("sonar.token", ""));
-        assert_eq!(split_define("a=b=c").unwrap(), ("a", "b=c"));
-        assert!(split_define("sonar.token").is_err());
-        assert!(split_define("=value").is_err());
+        assert_eq!(parse_define("sonar.token=").unwrap(), ("sonar.token".to_string(), String::new()));
+        assert_eq!(parse_define("a=b=c").unwrap(), ("a".to_string(), "b=c".to_string()));
+        assert!(parse_define("sonar.token").is_err());
+        assert!(parse_define("=value").is_err());
     }
 
     #[test]

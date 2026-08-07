@@ -19,9 +19,6 @@ use thiserror::Error;
 /// Every failure the bootstrapper can report. Rendered once, in `main`.
 #[derive(Debug, Error)]
 pub enum ScannerError {
-    #[error("Invalid property definition '{0}'. Expected the form -Dkey=value")]
-    InvalidDefine(String),
-
     #[error("{0}")]
     NotImplemented(String),
 }

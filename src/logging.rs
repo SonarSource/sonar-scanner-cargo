@@ -14,65 +14,55 @@
  * You should have received a copy of the Sonar Source-Available License
  * along with this program; if not, see https://sonarsource.com/license/ssal/
  */
-//! Log emission in the `sonar-scanner-cli` format.
+//! The scanner's [`log`] implementation.
 //!
-//! Nothing in this crate writes to stdout or stderr directly: every line goes through [`emit`], so
-//! that there is a single place to add secret redaction once there are secrets to redact.
+//! Using the `log` facade rather than bespoke macros means records emitted by dependencies land in
+//! the same stream, formatted the same way, and — once secret redaction arrives — redacted by the
+//! same code. The five levels of the facade are exactly the five the scanner engine emits on its
+//! NDJSON stdout, so re-emitting them needs no mapping.
 
-use std::fmt::Display;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Level {
-    Debug,
-    Info,
-    Error,
-}
+use log::{Level, LevelFilter, Log, Metadata, Record};
 
-impl Level {
-    fn label(self) -> &'static str {
-        match self {
-            Level::Debug => "DEBUG",
-            Level::Info => "INFO",
-            Level::Error => "ERROR",
+static LOGGER: ScannerLogger = ScannerLogger;
+
+struct ScannerLogger;
+
+impl Log for ScannerLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= log::max_level()
+    }
+
+    fn log(&self, record: &Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let line = format!("{}: {}", record.level(), record.args());
+        // ERROR goes to stderr, everything else to stdout.
+        if record.level() == Level::Error {
+            let mut out = std::io::stderr().lock();
+            let _ = writeln!(out, "{line}");
+        } else {
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{line}");
         }
     }
+
+    fn flush(&self) {
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+    }
 }
 
-static VERBOSE: AtomicBool = AtomicBool::new(false);
+/// Install the scanner logger. Subsequent calls are ignored, as the facade allows only one logger.
+pub fn init(verbose: bool) {
+    let _ = log::set_logger(&LOGGER);
+    set_verbose(verbose);
+}
 
+/// `sonar.verbose` selects DEBUG, per the bootstrapping guidelines. It can be set again once the
+/// property has been resolved from a file or the environment rather than the command line.
 pub fn set_verbose(verbose: bool) {
-    VERBOSE.store(verbose, Ordering::Relaxed);
+    log::set_max_level(if verbose { LevelFilter::Debug } else { LevelFilter::Info });
 }
-
-pub fn is_verbose() -> bool {
-    VERBOSE.load(Ordering::Relaxed)
-}
-
-/// Emit one log line. `ERROR` goes to stderr, everything else to stdout, mirroring the CLI scanner.
-pub fn emit(level: Level, message: impl Display) {
-    if level == Level::Debug && !is_verbose() {
-        return;
-    }
-    let line = format!("{}: {message}", level.label());
-    if level == Level::Error {
-        let mut out = std::io::stderr().lock();
-        let _ = writeln!(out, "{line}");
-    } else {
-        let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "{line}");
-    }
-}
-
-macro_rules! log_debug {
-    ($($arg:tt)*) => { $crate::logging::emit($crate::logging::Level::Debug, format_args!($($arg)*)) };
-}
-macro_rules! log_info {
-    ($($arg:tt)*) => { $crate::logging::emit($crate::logging::Level::Info, format_args!($($arg)*)) };
-}
-macro_rules! log_error {
-    ($($arg:tt)*) => { $crate::logging::emit($crate::logging::Level::Error, format_args!($($arg)*)) };
-}
-
-pub(crate) use {log_debug, log_error, log_info};

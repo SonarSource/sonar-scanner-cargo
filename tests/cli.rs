@@ -96,13 +96,15 @@ fn verbose_enables_debug_logging() {
     assert!(verbose.stdout.contains("DEBUG:"), "{}", verbose.stdout);
 }
 
+/// Malformed arguments are clap's to report, so this is a usage error (exit 2) rather than a
+/// bootstrap failure (exit 1).
 #[test]
 fn a_malformed_define_is_rejected() {
     let dir = tempdir();
     let run = run(dir.path(), &[], &["sonar-scanner", "-Dnot-a-pair"]);
-    run.assert_failure();
-    assert!(run.stderr.contains("Invalid property definition 'not-a-pair'"), "{}", run.stderr);
-    assert!(run.stderr.contains("EXECUTION FAILURE"), "{}", run.stderr);
+    assert_eq!(run.status, 2, "{}", run.all_output());
+    assert!(run.stderr.contains("invalid value 'not-a-pair'"), "{}", run.stderr);
+    assert!(run.stderr.contains("expected key=value"), "{}", run.stderr);
 }
 
 #[test]
