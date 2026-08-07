@@ -1,2 +1,4 @@
 # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
-* @sonarsource/code-quality-ci-experience-squad
+#
+# Only this file is owned, so that any reviewer can approve a change to the rest of the repository.
+/.github/CODEOWNERS @sonarsource/code-quality-ci-experience-squad
