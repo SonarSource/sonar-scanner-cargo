@@ -20,7 +20,12 @@ use std::collections::BTreeMap;
 
 use super::Properties;
 
-/// Environment variables that do not follow the systematic mapping.
+/// Properties whose environment variable cannot be derived by [`systematic_key`].
+///
+/// Every entry follows the same schema as the systematic mapping — dots and camel-case boundaries
+/// become `_`, and the name is upper-cased — and a test asserts it. The table exists because the
+/// reverse direction is ambiguous: `SONAR_HOST_URL` could be `sonar.host.url` or `sonar.hostUrl`,
+/// and only a list of known properties can tell them apart.
 const NAMED: &[(&str, &str)] = &[
     ("SONAR_TOKEN", super::TOKEN),
     ("SONAR_HOST_URL", super::HOST_URL),
@@ -87,6 +92,42 @@ mod tests {
 
     fn env_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// The documented property-to-variable schema: dots and camel-case boundaries become `_`, and
+    /// the whole name is upper-cased. `sonar.scanner.proxyPort` becomes `SONAR_SCANNER_PROXY_PORT`.
+    fn env_variable_name(property: &str) -> String {
+        let mut name = String::with_capacity(property.len() + 4);
+        for c in property.chars() {
+            if c == '.' {
+                name.push('_');
+            } else if c.is_ascii_uppercase() {
+                name.push('_');
+                name.push(c);
+            } else {
+                name.push(c.to_ascii_uppercase());
+            }
+        }
+        name
+    }
+
+    #[test]
+    fn the_named_variables_follow_the_same_schema() {
+        for (variable, property) in NAMED {
+            assert_eq!(env_variable_name(property), *variable, "for {property}");
+        }
+    }
+
+    #[test]
+    fn the_systematic_mapping_inverts_the_same_schema() {
+        for property in [
+            "sonar.scanner.os",
+            "sonar.scanner.proxyPort",
+            "sonar.scanner.javaOpts",
+            "sonar.scanner.skipJreProvisioning",
+        ] {
+            assert_eq!(systematic_key(&env_variable_name(property)).as_deref(), Some(property));
+        }
     }
 
     #[test]
