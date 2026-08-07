@@ -34,8 +34,11 @@ use log::{debug, warn};
 pub const MANIFEST_FILE: &str = "Cargo.toml";
 
 /// Keys whose real property name is not the camel-cased form of the bare key.
-const ALIASES: &[(&str, &str)] =
-    &[("host-url", "sonar.host.url"), ("project-base-dir", "sonar.projectBaseDir"), ("user-home", "sonar.userHome")];
+///
+/// This is not a list of supported properties: any property is accepted, because [`resolve_key`]
+/// derives the name mechanically. Only the handful that break the convention need an entry, and
+/// `sonar.host.url` is the one a user is likely to reach for — the rest can be spelled out.
+const ALIASES: &[(&str, &str)] = &[("host-url", "sonar.host.url")];
 
 /// Read `<base_dir>/Cargo.toml` and return the properties configured in it.
 ///
@@ -238,17 +241,41 @@ mod tests {
     }
 
     #[test]
-    fn maps_the_dotted_property_aliases() {
+    fn maps_the_dotted_property_alias() {
         let properties = load(
             r#"
             [package.metadata.sonar]
             host-url = "https://sq.example.com"
-            user-home = "/tmp/sonar"
             "#,
         )
         .unwrap();
         assert_eq!(properties.get("sonar.host.url"), Some("https://sq.example.com"));
+    }
+
+    /// There is no table of supported properties: kebab-case plus nesting reaches the whole
+    /// namespace, including the bootstrapper properties of the implementation guidelines.
+    #[test]
+    fn derives_the_bootstrapper_properties_without_an_alias() {
+        let properties = load(
+            r#"
+            [package.metadata.sonar]
+            user-home = "/tmp/sonar"
+            project-base-dir = "crates/core"
+
+            [package.metadata.sonar.scanner]
+            proxy-port = 3128
+            truststore-path = "/etc/ssl/truststore.p12"
+
+            [package.metadata.sonar.buildsystem.autoconfig]
+            disabled = true
+            "#,
+        )
+        .unwrap();
         assert_eq!(properties.get("sonar.userHome"), Some("/tmp/sonar"));
+        assert_eq!(properties.get("sonar.projectBaseDir"), Some("crates/core"));
+        assert_eq!(properties.get("sonar.scanner.proxyPort"), Some("3128"));
+        assert_eq!(properties.get("sonar.scanner.truststorePath"), Some("/etc/ssl/truststore.p12"));
+        assert_eq!(properties.get("sonar.buildsystem.autoconfig.disabled"), Some("true"));
     }
 
     #[test]
