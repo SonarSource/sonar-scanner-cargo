@@ -18,8 +18,10 @@
 
 mod cli;
 mod config;
+mod endpoint;
 mod error;
 mod logging;
+mod platform;
 
 use std::collections::BTreeMap;
 use std::process::ExitCode;
@@ -59,12 +61,21 @@ fn run(cli: &Cli, start_time_ms: u128) -> Result<ExitCode> {
 
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let cwd = std::env::current_dir().map_err(ScannerError::CurrentDir)?;
-    let config = config::resolve(cli, &env, &cwd, start_time_ms)?;
+    let mut config = config::resolve(cli, &env, &cwd, start_time_ms)?;
 
     // `sonar.verbose` may have come from a file or the environment rather than `-v`.
     if config.properties.get_bool(config::VERBOSE) {
         logging::set_verbose(true);
     }
+    let endpoint = endpoint::resolve(&config.properties)?;
+    let platform = platform::detect(&config.properties);
+    // The engine expects a resolved `sonar.host.url`, including when the target is SonarQube Cloud.
+    config.set_resolved(config::HOST_URL, &endpoint.host_url);
+    config.set_resolved(config::API_BASE_URL, &endpoint.api_base_url);
+    info!("Analysis target: {} at {}", endpoint.product(), endpoint.host_url);
+    debug!("Detected platform: {}/{}", platform.os, platform.arch);
+    info!("Base directory: {}", config.project_base_dir.display());
+
     log_resolved(&config);
 
     // Endpoint resolution, provisioning and the engine handoff are not implemented yet.

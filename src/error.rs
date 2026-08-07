@@ -34,6 +34,9 @@ pub enum ScannerError {
     #[error("Invalid Sonar configuration in {path}: {message}")]
     InvalidManifestConfig { path: PathBuf, message: String },
 
+    #[error("{0}")]
+    Endpoint(#[from] crate::endpoint::EndpointError),
+
     #[error("Unable to determine the current directory: {0}")]
     CurrentDir(std::io::Error),
 
