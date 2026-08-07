@@ -260,9 +260,10 @@ fn apply_defaults(
     user_home: &Path,
 ) {
     // Both directories are recorded in absolute form, whatever the user wrote. The origin stays
-    // theirs when they supplied the key: the value is still theirs, only normalised.
+    // theirs when they supplied the key: the value is still theirs, only normalised. A blank value
+    // is not a value — the resolvers already fell back to the default, so the origin must too.
     for (key, directory) in [(PROJECT_BASE_DIR, project_base_dir), (USER_HOME, user_home)] {
-        if !properties.contains(key) {
+        if properties.get_non_blank(key).is_none() {
             origins.insert(key.to_string(), Source::Bootstrapper);
         }
         properties.set(key, directory.display().to_string());
@@ -270,7 +271,7 @@ fn apply_defaults(
     // Engine-side auto-configuration became opt-in in SCANENGINE-542, so its own default is `true`.
     // The bootstrapper turns it on for the user, because a Cargo project would otherwise derive
     // nothing and the whole point of this scanner would be lost. Still overridable.
-    if !properties.contains(AUTOCONFIG_DISABLED) {
+    if properties.get_non_blank(AUTOCONFIG_DISABLED).is_none() {
         properties.set(AUTOCONFIG_DISABLED, "false");
         origins.insert(AUTOCONFIG_DISABLED.to_string(), Source::Bootstrapper);
     }
@@ -438,6 +439,22 @@ mod tests {
         let dir = tempdir();
         let config = resolve_with(&[], &[("HOME", &dir.path().display().to_string())], dir.path());
         assert_eq!(config.user_home, dir.path().join(".sonar"));
+    }
+
+    #[test]
+    fn a_blank_value_is_credited_to_the_bootstrapper_that_replaced_it() {
+        let dir = tempdir();
+        let config = resolve_with(
+            &["-Dsonar.projectBaseDir=", "-Dsonar.userHome=  ", "-Dsonar.buildsystem.autoconfig.disabled="],
+            &[],
+            dir.path(),
+        );
+        // The resolvers ignore a blank value, so the defaults are what is reported.
+        assert_eq!(config.properties.get(PROJECT_BASE_DIR), Some(dir.path().display().to_string().as_str()));
+        assert_eq!(config.properties.get(AUTOCONFIG_DISABLED), Some("false"));
+        for key in [PROJECT_BASE_DIR, USER_HOME, AUTOCONFIG_DISABLED] {
+            assert_eq!(config.origin_of(key), Source::Bootstrapper, "for {key}");
+        }
     }
 
     #[test]
