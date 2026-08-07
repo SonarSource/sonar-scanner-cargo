@@ -92,7 +92,10 @@ pub fn resolve(properties: &Properties) -> Result<Endpoint, EndpointError> {
     let region = properties.get_non_blank(REGION).unwrap_or("").to_lowercase();
 
     // A custom Cloud URL is a testing/staging override; it short-circuits everything else. The
-    // region is still validated, so that an override cannot smuggle in a region that does not exist.
+    // region is validated for existence, so an override cannot smuggle in a region that does not
+    // exist, but it is deliberately not cross-checked against the URL: the override exists precisely
+    // to point at a host that is none of the known ones, and an arbitrary staging host carries no
+    // region that could be inferred from it. On this path the region is taken as declared.
     if let Some(cloud_url) = cloud_url {
         cloud_region(&region)?;
         if let Some(host_url) = host_url
@@ -308,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_a_known_region_with_a_custom_cloud_url() {
+    fn takes_the_region_as_declared_with_a_custom_cloud_url() {
         let endpoint = resolved(&[
             (SONARCLOUD_URL, "https://staging.sonarqube.us"),
             (API_BASE_URL, "https://api.staging.sonarqube.us"),
@@ -316,6 +319,15 @@ mod tests {
         ]);
         assert_eq!(endpoint.region, "us");
         assert_eq!(endpoint.product(), "SonarQube Cloud [us]");
+
+        // Not cross-checked against the URL: a staging host carries no inferable region, so the
+        // declared one is used even when the URL resembles another region's.
+        let endpoint = resolved(&[
+            (SONARCLOUD_URL, "https://staging.sonarcloud.io"),
+            (API_BASE_URL, "https://api.staging.sonarcloud.io"),
+            (REGION, "us"),
+        ]);
+        assert_eq!(endpoint.region, "us");
     }
 
     #[test]
