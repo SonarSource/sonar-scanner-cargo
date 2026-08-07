@@ -89,6 +89,27 @@ fully-qualified property name.
 > published inside the `.crate` archive on crates.io, where it cannot be deleted. The scanner warns
 > if it finds one. Use `SONAR_TOKEN` instead.
 
+## Endpoint resolution
+
+| Configuration | Product | Host URL | API base URL |
+|---|---|---|---|
+| nothing set | SonarQube Cloud | `https://sonarcloud.io` | `https://api.sonarcloud.io` |
+| `sonar.region=us` | SonarQube Cloud (US) | `https://sonarqube.us` | `https://api.sonarqube.us` |
+| `sonar.host.url` = a Cloud URL | SonarQube Cloud | as above | as above |
+| any other `sonar.host.url` | SonarQube Server | as given | `<host>/api/v2` |
+
+The region is case-insensitive, and Cloud URLs are recognised with or without a trailing slash or a
+`www.` prefix. Inconsistent combinations — a region together with a Server URL, or a region that
+contradicts the Cloud URL — are rejected with an explicit error rather than guessed.
+`sonar.scanner.apiBaseUrl` overrides the derived API base URL in every case.
+
+## Base directory
+
+`sonar.projectBaseDir` defaults to the current working directory and can be overridden. The
+bootstrapper deliberately does **not** walk up looking for a workspace root, so running it from
+inside a member crate analyses that member. Everything Cargo-specific — workspaces, targets, build
+output — is the scanner engine's job.
+
 ## Output streams
 
 `INFO` and `DEBUG` go to stdout, `ERROR` goes to stderr. The exit code is `0` on success and `1` on

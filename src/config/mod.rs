@@ -39,10 +39,13 @@ pub const BOOTSTRAP_START_TIME: &str = "sonar.scanner.bootstrapStartTime";
 
 pub const HOST_URL: &str = "sonar.host.url";
 pub const REGION: &str = "sonar.region";
+pub const API_BASE_URL: &str = "sonar.scanner.apiBaseUrl";
 pub const TOKEN: &str = "sonar.token";
 pub const USER_HOME: &str = "sonar.userHome";
 pub const PROJECT_BASE_DIR: &str = "sonar.projectBaseDir";
 pub const VERBOSE: &str = "sonar.verbose";
+pub const SCANNER_OS: &str = "sonar.scanner.os";
+pub const SCANNER_ARCH: &str = "sonar.scanner.arch";
 
 /// This bootstrapper's identity, per the scanner naming convention (maven, gradle, cli, npm, …).
 pub const SCANNER_APP: &str = "cargo";
@@ -173,6 +176,15 @@ pub struct Configuration {
 impl Configuration {
     pub fn origin_of(&self, key: &str) -> Source {
         self.origins.get(key).copied().unwrap_or(Source::Bootstrapper)
+    }
+
+    /// Record a value the bootstrapper derived from the user's input, keeping the original origin
+    /// when the user did supply the key.
+    pub fn set_resolved(&mut self, key: &str, value: &str) {
+        if !self.properties.contains(key) {
+            self.origins.insert(key.to_string(), Source::Bootstrapper);
+        }
+        self.properties.set(key, value);
     }
 }
 
