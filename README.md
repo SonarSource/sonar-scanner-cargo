@@ -89,6 +89,31 @@ fully-qualified property name.
 > published inside the `.crate` archive on crates.io, where it cannot be deleted. The scanner warns
 > if it finds one. Use `SONAR_TOKEN` instead.
 
+## Configuration precedence
+
+Highest first:
+
+1. Command line — `-Dsonar.token=…`, `--sonar-token …`
+2. Individual environment variables — `SONAR_TOKEN`, `SONAR_HOST_URL`, `SONAR_REGION`,
+   `SONAR_USER_HOME`, and the systematic `SONAR_SCANNER_XXX_YYY` → `sonar.scanner.xxxYyy` mapping
+   (`SONAR_SCANNER_PROXY_PORT=3128` → `sonar.scanner.proxyPort=3128`)
+3. `SONAR_SCANNER_JSON_PARAMS` — a JSON object of properties (fallback: `SONARQUBE_SCANNER_PARAMS`)
+4. `[package.metadata.sonar]` / `[workspace.metadata.sonar]` in `<base dir>/Cargo.toml`
+5. `sonar-project.properties` in the base directory — supported so that a project migrating from
+   the CLI scanner keeps working; `Cargo.toml` is the recommended place
+6. `<sonar.userHome>/sonar-scanner.properties`, where `sonar.userHome` defaults to `~/.sonar` — the
+   place for machine-wide settings such as a host URL or a token
+
+Layers 1–3 and 6 are the generic scanner bootstrapping contract, shared with every other Sonar
+scanner. Layers 4 and 5 are this bootstrapper's project-level configuration files, which the
+contract leaves to each bootstrapper to choose (Maven uses `pom.xml`, the CLI scanner uses
+`sonar-project.properties`).
+
+When the same key is given as both `--sonar-token` and `-Dsonar.token=…`, the `-D` form wins.
+
+`--dry-run` prints the origin of every resolved property, which is the quickest way to answer
+"where did that value come from?".
+
 ## Endpoint resolution
 
 | Configuration | Product | Host URL | API base URL |
@@ -110,10 +135,23 @@ bootstrapper deliberately does **not** walk up looking for a workspace root, so 
 inside a member crate analyses that member. Everything Cargo-specific — workspaces, targets, build
 output — is the scanner engine's job.
 
+## Properties set by the scanner
+
+`sonar.scanner.app` (`cargo`), `sonar.scanner.appVersion` and `sonar.scanner.bootstrapStartTime` are
+owned by the bootstrapper; a user-supplied value is ignored with a warning. `sonar.projectBaseDir`
+and `sonar.userHome` are defaults you can override.
+
+### Secrets
+
+`sonar.token`, `sonar.login`, `sonar.password` and the proxy, truststore and keystore passwords are
+never written to a log stream at any verbosity, and are masked as `******` in the `--dry-run` dump.
+They are of course present in the payload handed to the scanner engine, including the one written by
+`-Dsonar.scanner.internal.dumpToFile=<path>`.
+
 ## Output streams
 
-`INFO` and `DEBUG` go to stdout, `ERROR` goes to stderr. The exit code is `0` on success and `1` on
-failure.
+`INFO`, `WARN`, `DEBUG` and the dry-run dump go to stdout; `ERROR` goes to stderr. The exit code is
+`0` on success and `1` on failure. A malformed command line is a usage error and exits `2`.
 
 ## Development
 

@@ -21,9 +21,10 @@
 //! facade are exactly the five the scanner engine emits on its NDJSON stdout, so re-emitting them
 //! needs no mapping.
 //!
-//! Nothing in this crate writes to stdout or stderr directly: every line goes through the logger,
-//! so a value registered with [`register_secrets`] cannot reach an output stream.
+//! Nothing in this crate writes to stdout or stderr directly: every line goes through the logger or
+//! through [`print`], so a value registered with [`register_secrets`] cannot reach an output stream.
 
+use std::fmt::Display;
 use std::io::Write;
 use std::sync::OnceLock;
 
@@ -111,6 +112,12 @@ fn redact_with(secrets: &[String], message: &str) -> String {
         }
     }
     redacted
+}
+
+/// Write a line that is program output rather than a log record (the dry-run dump).
+pub fn print(message: impl Display) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{}", redact(&message.to_string()));
 }
 
 #[cfg(test)]

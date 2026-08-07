@@ -28,6 +28,13 @@ pub enum ScannerError {
         source: std::io::Error,
     },
 
+    #[error("Failed to write {path}: {source}")]
+    FileWrite {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("{var} is not a valid JSON object of string properties: {message}")]
     InvalidJsonParams { var: String, message: String },
 

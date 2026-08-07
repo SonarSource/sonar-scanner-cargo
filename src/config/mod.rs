@@ -44,6 +44,7 @@ pub const TOKEN: &str = "sonar.token";
 pub const USER_HOME: &str = "sonar.userHome";
 pub const PROJECT_BASE_DIR: &str = "sonar.projectBaseDir";
 pub const VERBOSE: &str = "sonar.verbose";
+pub const DUMP_TO_FILE: &str = "sonar.scanner.internal.dumpToFile";
 pub const SCANNER_OS: &str = "sonar.scanner.os";
 pub const SCANNER_ARCH: &str = "sonar.scanner.arch";
 

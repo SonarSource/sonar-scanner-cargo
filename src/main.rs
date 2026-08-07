@@ -18,9 +18,11 @@
 
 mod cli;
 mod config;
+mod dryrun;
 mod endpoint;
 mod error;
 mod logging;
+mod payload;
 mod platform;
 
 use std::collections::BTreeMap;
@@ -32,6 +34,7 @@ use log::{debug, error, info};
 use crate::cli::Cli;
 use crate::config::Configuration;
 use crate::error::{Result, ScannerError};
+use crate::payload::ScannerPayload;
 
 /// Exit code for a failed bootstrap, matching the other scanners.
 const FAILURE: u8 = 1;
@@ -78,9 +81,21 @@ fn run(cli: &Cli, start_time_ms: u128) -> Result<ExitCode> {
 
     log_resolved(&config);
 
-    // Endpoint resolution, provisioning and the engine handoff are not implemented yet.
+    if cli.dry_run {
+        dryrun::report(&config, &endpoint, &platform);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if let Some(path) = config.properties.get_non_blank(config::DUMP_TO_FILE) {
+        return dump_to_file(&config, path).map(|()| ExitCode::SUCCESS);
+    }
+
+    // Provisioning and the engine handoff are not implemented yet.
     Err(ScannerError::NotImplemented(
-        "Running an analysis is not implemented yet: this build resolves the configuration only.".to_string(),
+        "Running an analysis is not implemented yet: this build resolves the configuration only. \
+         Use --dry-run to inspect the resolved properties, or -Dsonar.scanner.internal.dumpToFile=<path> \
+         to write the payload that would be sent to the scanner engine."
+            .to_string(),
     ))
 }
 
@@ -97,4 +112,13 @@ fn log_resolved(config: &Configuration) {
         let shown = if config::is_sensitive(key) && !value.is_empty() { "******" } else { value };
         debug!("  {key}={shown} [{}]", config.origin_of(key).label());
     }
+}
+
+/// Testing hook: write the engine payload instead of executing an analysis.
+fn dump_to_file(config: &Configuration, path: &str) -> Result<()> {
+    let payload = ScannerPayload::from_properties(&config.properties);
+    std::fs::write(path, payload.to_pretty_json())
+        .map_err(|source| ScannerError::FileWrite { path: path.into(), source })?;
+    info!("Scanner properties written to {path}");
+    Ok(())
 }
