@@ -75,12 +75,15 @@ are derived by the scanner engine during the analysis.
 | a nested table, `[package.metadata.sonar.scanner] java-opts = "…"` | `sonar.scanner.javaOpts=…` |
 | `exclusions = ["a/**", "b/**"]` | `sonar.exclusions=a/**,b/**` |
 | `verbose = true`, `connect-timeout = 30` | `sonar.verbose=true`, `…connectTimeout=30` |
+| `host-url = "…"` | `sonar.host.url=…` — the one alias |
 | `"sonar.cpd.exclusions" = "…"` | `sonar.cpd.exclusions=…` — verbatim |
 
-Bare keys are kebab-case and get a `sonar.` prefix; nested tables become dotted segments. Three
-properties whose real names are not camel-cased have aliases: `host-url` → `sonar.host.url`,
-`user-home` → `sonar.userHome`, `project-base-dir` → `sonar.projectBaseDir`. Anything the
-convention cannot express can be written as a quoted, fully-qualified property name.
+Bare keys are kebab-case and get a `sonar.` prefix; nested tables become dotted segments. Every
+property is accepted — the name is derived, not looked up in a list — so `[…sonar.scanner]
+proxy-port = 3128` gives `sonar.scanner.proxyPort=3128` with no special handling. The exception is
+`sonar.host.url`, whose real name is dotted where the convention would produce `sonar.hostUrl`;
+it has an alias. Anything else the convention cannot express can be written as a quoted,
+fully-qualified property name.
 
 > **Do not put your token in `Cargo.toml`.** It is committed, and for a library crate it is
 > published inside the `.crate` archive on crates.io, where it cannot be deleted. The scanner warns
