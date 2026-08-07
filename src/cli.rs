@@ -18,6 +18,8 @@ use std::ffi::OsString;
 
 use clap::Parser;
 
+use crate::config::Properties;
+
 /// Run SonarQube Server and SonarQube Cloud analysis on a Cargo project.
 ///
 /// All analysis parameters are Sonar properties. They can be set with `-Dkey=value`, with the
@@ -28,7 +30,14 @@ use clap::Parser;
     name = "cargo sonar-scanner",
     version,
     about,
-    long_about = None
+    long_about = None,
+    after_help = "Configuration precedence, highest first:\n  \
+        1. command line (-Dkey=value, --sonar-*)\n  \
+        2. environment variables (SONAR_TOKEN, SONAR_HOST_URL, SONAR_SCANNER_*)\n  \
+        3. SONAR_SCANNER_JSON_PARAMS (fallback: SONARQUBE_SCANNER_PARAMS)\n  \
+        4. [package.metadata.sonar] in <base dir>/Cargo.toml\n  \
+        5. <base dir>/sonar-project.properties\n  \
+        6. <sonar.userHome>/sonar-scanner.properties"
 )]
 pub struct Cli {
     /// Define a Sonar property, repeatable (e.g. -Dsonar.projectKey=my-crate)
@@ -83,6 +92,35 @@ impl Cli {
     /// must behave identically when invoked directly as `cargo-sonar-scanner <args…>`.
     pub fn parse_argv(argv: impl IntoIterator<Item = impl Into<OsString> + Clone>) -> Self {
         Self::parse_from(strip_cargo_subcommand(argv))
+    }
+
+    /// Project the command line onto the Sonar property namespace.
+    ///
+    /// The `--sonar-*` options are applied first so that an explicit `-Dkey=value` always wins.
+    pub fn to_properties(&self) -> Properties {
+        let mut props = Properties::new();
+        let named = [
+            ("sonar.token", &self.sonar_token),
+            ("sonar.host.url", &self.sonar_host_url),
+            ("sonar.region", &self.sonar_region),
+            ("sonar.organization", &self.sonar_organization),
+            ("sonar.projectKey", &self.sonar_project_key),
+            ("sonar.projectVersion", &self.sonar_project_version),
+            ("sonar.projectBaseDir", &self.sonar_project_base_dir),
+            ("sonar.userHome", &self.sonar_user_home),
+        ];
+        for (key, value) in named {
+            if let Some(value) = value {
+                props.set(key, value);
+            }
+        }
+        if self.verbose {
+            props.set("sonar.verbose", "true");
+        }
+        for (key, value) in &self.define {
+            props.set(key, value);
+        }
+        props
     }
 }
 
@@ -150,6 +188,12 @@ mod tests {
                 ("sonar.verbose".to_string(), "true".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn define_beats_the_equivalent_named_option() {
+        let cli = Cli::parse_argv(["cargo-sonar-scanner", "--sonar-token", "from-option", "-Dsonar.token=from-define"]);
+        assert_eq!(cli.to_properties().get("sonar.token"), Some("from-define"));
     }
 
     #[test]

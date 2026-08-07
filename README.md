@@ -7,10 +7,10 @@ $ export SONAR_TOKEN=...
 $ cargo sonar-scanner
 ```
 
-> **Status: work in progress.** This build is the crate skeleton and the command line interface
-> only. Configuration resolution, JRE and scanner engine provisioning, and the handoff to the
-> scanner engine are still to come, so `cargo sonar-scanner` currently stops with an explanatory
-> error. See RUST-593.
+> **Status: work in progress.** This build implements the skeleton and the whole offline
+> configuration layer (milestones M0 and M1). Provisioning the JRE and the scanner engine (M2) and
+> running the analysis (M3) are not implemented yet, so a plain `cargo sonar-scanner` currently
+> stops with an explanatory error. Everything behind `--dry-run` is fully functional.
 
 ## Install
 
@@ -25,14 +25,134 @@ The binary is called `cargo-sonar-scanner`; once it is on `PATH`, Cargo resolves
 
 ```console
 $ cargo sonar-scanner --help
+$ cargo sonar-scanner --dry-run                       # resolve and print, contact nothing
+$ cargo sonar-scanner -Dsonar.projectKey=my-crate
+$ cargo sonar-scanner --sonar-host-url https://sonarqube.example.com
 ```
 
-Analysis parameters are Sonar properties, set with `-Dkey=value` or with the `--sonar-*` options.
+Analysis parameters are Sonar properties. Set them with `-Dkey=value`, with the `--sonar-*` options,
+with environment variables, or in `Cargo.toml`.
 
-## Output streams
+## Configuring the analysis in `Cargo.toml`
 
-`INFO` and `DEBUG` go to stdout, `ERROR` goes to stderr. The exit code is `0` on success and `1` on
-failure.
+The Cargo-native place to configure the analysis is the `[package.metadata.sonar]` table — the
+table Cargo reserves for third-party tools and otherwise ignores completely:
+
+```toml
+[package]
+name = "my-crate"
+version = "0.1.0"
+
+[package.metadata.sonar]
+project-key = "my-org_my-crate"
+host-url = "https://sonarqube.example.com"
+exclusions = ["vendor/**"]
+
+[package.metadata.sonar.scanner]
+java-opts = "-Xmx1g"
+```
+
+resolves to:
+
+```
+sonar.projectKey=my-org_my-crate
+sonar.host.url=https://sonarqube.example.com
+sonar.exclusions=vendor/**
+sonar.scanner.javaOpts=-Xmx1g
+```
+
+In a **virtual workspace** — a root `Cargo.toml` with no `[package]` — use
+`[workspace.metadata.sonar]` instead. If a manifest has both tables, `[package.metadata.sonar]`
+wins key by key, so a workspace root can hold shared settings and a member can override one of
+them.
+
+Only this one table is read, and only from the manifest in the base directory. The scanner does not
+otherwise interpret `Cargo.toml`: workspace membership, targets, source layout and inherited fields
+are derived by the scanner engine during the analysis.
+
+### Key naming
+
+| You write | It becomes |
+|---|---|
+| `project-key = "x"` | `sonar.projectKey=x` |
+| a nested table, `[package.metadata.sonar.scanner] java-opts = "…"` | `sonar.scanner.javaOpts=…` |
+| `exclusions = ["a/**", "b/**"]` | `sonar.exclusions=a/**,b/**` |
+| `verbose = true`, `connect-timeout = 30` | `sonar.verbose=true`, `…connectTimeout=30` |
+| `"sonar.cpd.exclusions" = "…"` | `sonar.cpd.exclusions=…` — verbatim |
+
+Bare keys are kebab-case and get a `sonar.` prefix; nested tables become dotted segments. Three
+properties whose real names are not camel-cased have aliases: `host-url` → `sonar.host.url`,
+`user-home` → `sonar.userHome`, `project-base-dir` → `sonar.projectBaseDir`. Anything the
+convention cannot express can be written as a quoted, fully-qualified property name.
+
+> **Do not put your token in `Cargo.toml`.** It is committed, and for a library crate it is
+> published inside the `.crate` archive on crates.io, where it cannot be deleted. The scanner warns
+> if it finds one. Use `SONAR_TOKEN` instead.
+
+## Configuration precedence
+
+Highest first:
+
+1. Command line — `-Dsonar.token=…`, `--sonar-token …`
+2. Individual environment variables — `SONAR_TOKEN`, `SONAR_HOST_URL`, `SONAR_REGION`,
+   `SONAR_USER_HOME`, and the systematic `SONAR_SCANNER_XXX_YYY` → `sonar.scanner.xxxYyy` mapping
+   (`SONAR_SCANNER_PROXY_PORT=3128` → `sonar.scanner.proxyPort=3128`)
+3. `SONAR_SCANNER_JSON_PARAMS` — a JSON object of properties (fallback: `SONARQUBE_SCANNER_PARAMS`)
+4. `[package.metadata.sonar]` / `[workspace.metadata.sonar]` in `<base dir>/Cargo.toml`
+5. `sonar-project.properties` in the base directory — supported so that a project migrating from
+   the CLI scanner keeps working; `Cargo.toml` is the recommended place
+6. `<sonar.userHome>/sonar-scanner.properties`, where `sonar.userHome` defaults to `~/.sonar` — the
+   place for machine-wide settings such as a host URL or a token
+
+Layers 1–3 and 6 are the generic scanner bootstrapping contract, shared with every other Sonar
+scanner. Layers 4 and 5 are this bootstrapper's project-level configuration files, which the
+contract leaves to each bootstrapper to choose (Maven uses `pom.xml`, the CLI scanner uses
+`sonar-project.properties`).
+
+When the same key is given as both `--sonar-token` and `-Dsonar.token=…`, the `-D` form wins.
+
+`--dry-run` prints the origin of every resolved property, which is the quickest way to answer
+"where did that value come from?".
+
+### Endpoint resolution
+
+| Configuration | Product | Host URL | API base URL |
+|---|---|---|---|
+| nothing set | SonarQube Cloud | `https://sonarcloud.io` | `https://api.sonarcloud.io` |
+| `sonar.region=us` | SonarQube Cloud (US) | `https://sonarqube.us` | `https://api.sonarqube.us` |
+| `sonar.host.url` = a Cloud URL | SonarQube Cloud | as above | as above |
+| any other `sonar.host.url` | SonarQube Server | as given | `<host>/api/v2` |
+
+The region is case-insensitive, and Cloud URLs are recognised with or without a trailing slash or a
+`www.` prefix. Inconsistent combinations — a region together with a Server URL, or a region that
+contradicts the Cloud URL — are rejected with an explicit error rather than guessed.
+`sonar.scanner.apiBaseUrl` overrides the derived API base URL in every case.
+
+### Base directory
+
+`sonar.projectBaseDir` defaults to the current working directory and can be overridden. The
+bootstrapper deliberately does **not** walk up looking for a workspace root, so running it from
+inside a member crate analyses that member. Everything Cargo-specific — workspaces, targets, build
+output — is the scanner engine's job.
+
+### Properties set by the scanner
+
+`sonar.scanner.app` (`cargo`), `sonar.scanner.appVersion` and `sonar.scanner.bootstrapStartTime` are
+owned by the bootstrapper; a user-supplied value is ignored with a warning. `sonar.projectBaseDir`,
+`sonar.userHome` and `sonar.buildsystem.autoconfig.disabled` (`false`) are defaults you can
+override.
+
+### Secrets
+
+`sonar.token`, `sonar.login`, `sonar.password` and the proxy, truststore and keystore passwords are
+never written to a log stream at any verbosity, and are masked as `******` in the `--dry-run` dump.
+They are of course present in the payload handed to the scanner engine, including the one written by
+`-Dsonar.scanner.internal.dumpToFile=<path>`.
+
+### Output streams
+
+`INFO`, `WARN`, `DEBUG` and the dry-run dump go to stdout; `ERROR` goes to stderr. The exit code is
+`0` on success and `1` on failure.
 
 ## Development
 

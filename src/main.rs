@@ -17,16 +17,24 @@
 //! `cargo sonar-scanner` — the SonarScanner bootstrapper for Cargo projects.
 
 mod cli;
+mod config;
+mod dryrun;
+mod endpoint;
 mod error;
 mod logging;
+mod payload;
+mod platform;
 
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{debug, error, info};
 
 use crate::cli::Cli;
+use crate::config::Configuration;
 use crate::error::{Result, ScannerError};
+use crate::payload::ScannerPayload;
 
 /// Exit code for a failed bootstrap, matching the other scanners.
 const FAILURE: u8 = 1;
@@ -53,17 +61,49 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli, start_time_ms: u128) -> Result<ExitCode> {
     info!("SonarScanner for Cargo {}", env!("CARGO_PKG_VERSION"));
-    debug!("Bootstrap start time: {start_time_ms}");
 
-    for (key, _) in &cli.define {
-        debug!("Property defined on the command line: {key}");
+    let env: BTreeMap<String, String> = std::env::vars().collect();
+    let cwd = std::env::current_dir().map_err(ScannerError::CurrentDir)?;
+    let mut config = config::resolve(cli, &env, &cwd, start_time_ms)?;
+
+    // `sonar.verbose` may have come from a file or the environment rather than `-v`.
+    if config.properties.get_bool(config::VERBOSE) {
+        logging::set_verbose(true);
+    }
+    debug!("Resolved {} properties", config.properties.len());
+
+    let endpoint = endpoint::resolve(&config.properties)?;
+    let platform = platform::detect(&config.properties);
+    // The engine expects a resolved `sonar.host.url`, including when the target is SonarQube Cloud.
+    config.set_resolved(config::HOST_URL, &endpoint.host_url);
+    config.set_resolved(config::API_BASE_URL, &endpoint.api_base_url);
+    info!("Analysis target: {} at {}", endpoint.product(), endpoint.host_url);
+    debug!("Detected platform: {}/{}", platform.os, platform.arch);
+    info!("Base directory: {}", config.project_base_dir.display());
+
+    if cli.dry_run {
+        dryrun::report(&config, &endpoint, &platform);
+        return Ok(ExitCode::SUCCESS);
     }
 
-    // Milestones M1 to M3 are not implemented yet.
+    if let Some(path) = config.properties.get_non_blank(config::DUMP_TO_FILE) {
+        return dump_to_file(&config, path).map(|()| ExitCode::SUCCESS);
+    }
+
+    // Milestones M2 (provisioning) and M3 (engine handoff) are not implemented yet.
     Err(ScannerError::NotImplemented(
-        "Running an analysis is not implemented yet: this build only provides the command line \
-         interface. Configuration resolution, provisioning and the scanner engine handoff are \
-         still to come."
+        "Running an analysis is not implemented yet: this build resolves the configuration only. \
+         Use --dry-run to inspect the resolved properties, or -Dsonar.scanner.internal.dumpToFile=<path> \
+         to write the payload that would be sent to the scanner engine."
             .to_string(),
     ))
+}
+
+/// Testing hook: write the engine payload instead of executing an analysis.
+fn dump_to_file(config: &Configuration, path: &str) -> Result<()> {
+    let payload = ScannerPayload::from_properties(&config.properties);
+    std::fs::write(path, payload.to_pretty_json())
+        .map_err(|source| ScannerError::FileWrite { path: path.into(), source })?;
+    info!("Scanner properties written to {path}");
+    Ok(())
 }
