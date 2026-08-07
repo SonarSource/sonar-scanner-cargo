@@ -23,7 +23,7 @@ use crate::config::Properties;
 /// Run SonarQube Server and SonarQube Cloud analysis on a Cargo project.
 ///
 /// All analysis parameters are Sonar properties. They can be set with `-Dkey=value`, with the
-/// `--sonar-*` options below, with environment variables, or in a properties file.
+/// `--sonar-*` options below, with environment variables, or in `Cargo.toml`.
 #[derive(Debug, Parser)]
 #[command(
     bin_name = "cargo sonar-scanner",
@@ -35,8 +35,9 @@ use crate::config::Properties;
         1. command line (-Dkey=value, --sonar-*)\n  \
         2. environment variables (SONAR_TOKEN, SONAR_HOST_URL, SONAR_SCANNER_*)\n  \
         3. SONAR_SCANNER_JSON_PARAMS (fallback: SONARQUBE_SCANNER_PARAMS)\n  \
-        4. <base dir>/sonar-project.properties\n  \
-        5. <sonar.userHome>/sonar-scanner.properties"
+        4. [package.metadata.sonar] in <base dir>/Cargo.toml\n  \
+        5. <base dir>/sonar-project.properties\n  \
+        6. <sonar.userHome>/sonar-scanner.properties"
 )]
 pub struct Cli {
     /// Define a Sonar property, repeatable (e.g. -Dsonar.projectKey=my-crate)
