@@ -17,15 +17,18 @@
 //! `cargo sonar-scanner` — the SonarScanner bootstrapper for Cargo projects.
 
 mod cli;
+mod config;
 mod error;
 mod logging;
 
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::{debug, error, info};
 
 use crate::cli::Cli;
+use crate::config::Configuration;
 use crate::error::{Result, ScannerError};
 
 /// Exit code for a failed bootstrap, matching the other scanners.
@@ -53,17 +56,34 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli, start_time_ms: u128) -> Result<ExitCode> {
     info!("SonarScanner for Cargo {}", env!("CARGO_PKG_VERSION"));
-    debug!("Bootstrap start time: {start_time_ms}");
 
-    for (key, _) in &cli.define {
-        debug!("Property defined on the command line: {key}");
+    let env: BTreeMap<String, String> = std::env::vars().collect();
+    let cwd = std::env::current_dir().map_err(ScannerError::CurrentDir)?;
+    let config = config::resolve(cli, &env, &cwd, start_time_ms)?;
+
+    // `sonar.verbose` may have come from a file or the environment rather than `-v`.
+    if config.properties.get_bool(config::VERBOSE) {
+        logging::set_verbose(true);
     }
+    log_resolved(&config);
 
-    // Milestones M1 to M3 are not implemented yet.
+    // Endpoint resolution, provisioning and the engine handoff are not implemented yet.
     Err(ScannerError::NotImplemented(
-        "Running an analysis is not implemented yet: this build only provides the command line \
-         interface. Configuration resolution, provisioning and the scanner engine handoff are \
-         still to come."
-            .to_string(),
+        "Running an analysis is not implemented yet: this build resolves the configuration only.".to_string(),
     ))
+}
+
+/// Report the whole resolution at DEBUG, so that `--verbose` answers "where did that value come
+/// from?" without a server. Sensitive values are masked.
+fn log_resolved(config: &Configuration) {
+    debug!("Base directory: {}", config.project_base_dir.display());
+    debug!("User home: {}", config.user_home.display());
+    for path in &config.loaded_files {
+        debug!("Loaded configuration from {}", path.display());
+    }
+    debug!("Resolved {} properties", config.properties.len());
+    for (key, value) in config.properties.iter() {
+        let shown = if config::is_sensitive(key) && !value.is_empty() { "******" } else { value };
+        debug!("  {key}={shown} [{}]", config.origin_of(key).label());
+    }
 }

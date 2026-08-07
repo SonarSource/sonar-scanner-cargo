@@ -14,11 +14,32 @@
  * You should have received a copy of the Sonar Source-Available License
  * along with this program; if not, see https://sonarsource.com/license/ssal/
  */
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 /// Every failure the bootstrapper can report. Rendered once, in `main`.
 #[derive(Debug, Error)]
 pub enum ScannerError {
+    #[error("Failed to read {path}: {source}")]
+    FileRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("{var} is not a valid JSON object of string properties: {message}")]
+    InvalidJsonParams { var: String, message: String },
+
+    #[error("Unable to determine the current directory: {0}")]
+    CurrentDir(std::io::Error),
+
+    #[error(
+        "Unable to determine the home directory. Set the user home explicitly with -Dsonar.userHome=<dir> \
+         or the SONAR_USER_HOME environment variable."
+    )]
+    NoHomeDirectory,
+
     #[error("{0}")]
     NotImplemented(String),
 }
