@@ -42,7 +42,6 @@ pub const TOKEN: &str = "sonar.token";
 pub const USER_HOME: &str = "sonar.userHome";
 pub const PROJECT_BASE_DIR: &str = "sonar.projectBaseDir";
 pub const VERBOSE: &str = "sonar.verbose";
-pub const AUTOCONFIG_DISABLED: &str = "sonar.buildsystem.autoconfig.disabled";
 
 /// This bootstrapper's identity, per the scanner naming convention (maven, gradle, cli, npm, …).
 pub const SCANNER_APP: &str = "cargo";
@@ -268,13 +267,6 @@ fn apply_defaults(
         }
         properties.set(key, directory.display().to_string());
     }
-    // Engine-side auto-configuration became opt-in in SCANENGINE-542, so its own default is `true`.
-    // The bootstrapper turns it on for the user, because a Cargo project would otherwise derive
-    // nothing and the whole point of this scanner would be lost. Still overridable.
-    if properties.get_non_blank(AUTOCONFIG_DISABLED).is_none() {
-        properties.set(AUTOCONFIG_DISABLED, "false");
-        origins.insert(AUTOCONFIG_DISABLED.to_string(), Source::Bootstrapper);
-    }
 }
 
 /// Teach the logger every credential in the property set, and warn about deprecated ones.
@@ -444,15 +436,10 @@ mod tests {
     #[test]
     fn a_blank_value_is_credited_to_the_bootstrapper_that_replaced_it() {
         let dir = tempdir();
-        let config = resolve_with(
-            &["-Dsonar.projectBaseDir=", "-Dsonar.userHome=  ", "-Dsonar.buildsystem.autoconfig.disabled="],
-            &[],
-            dir.path(),
-        );
+        let config = resolve_with(&["-Dsonar.projectBaseDir=", "-Dsonar.userHome=  "], &[], dir.path());
         // The resolvers ignore a blank value, so the defaults are what is reported.
         assert_eq!(config.properties.get(PROJECT_BASE_DIR), Some(dir.path().display().to_string().as_str()));
-        assert_eq!(config.properties.get(AUTOCONFIG_DISABLED), Some("false"));
-        for key in [PROJECT_BASE_DIR, USER_HOME, AUTOCONFIG_DISABLED] {
+        for key in [PROJECT_BASE_DIR, USER_HOME] {
             assert_eq!(config.origin_of(key), Source::Bootstrapper, "for {key}");
         }
     }
@@ -466,14 +453,16 @@ mod tests {
         assert_eq!(config.properties.get(BOOTSTRAP_START_TIME), Some("1700000000000"));
     }
 
+    /// The engine owns the default of every property it interprets. The bootstrapper only forwards
+    /// what the user actually set.
     #[test]
-    fn auto_configuration_is_enabled_by_default_and_overridable() {
+    fn build_system_auto_configuration_is_left_to_the_engine() {
         let dir = tempdir();
         let config = resolve_with(&[], &[], dir.path());
-        assert_eq!(config.properties.get(AUTOCONFIG_DISABLED), Some("false"));
+        assert!(!config.properties.contains("sonar.buildsystem.autoconfig.disabled"));
 
         let config = resolve_with(&["-Dsonar.buildsystem.autoconfig.disabled=true"], &[], dir.path());
-        assert_eq!(config.properties.get(AUTOCONFIG_DISABLED), Some("true"));
+        assert_eq!(config.properties.get("sonar.buildsystem.autoconfig.disabled"), Some("true"));
     }
 
     // Minimal temp-dir helper: the crate has no dev-dependency on `tempfile` yet.
