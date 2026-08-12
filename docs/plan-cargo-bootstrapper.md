@@ -172,10 +172,15 @@ Example: `SONAR_SCANNER_PROXY_PORT=123` → `sonar.scanner.proxyPort=123`.
 
 ### 5.5 Version check
 
-1. `GET <apiBaseUrl>/analysis/version` (authenticated).
-2. If ≠ 200, `GET <sonar.host.url>/api/server/version`.
-3. Cloud, or Server ≥ 10.6 ⇒ proceed. Older Server ⇒ **actionable error pointing at the CLI scanner**;
-   we carry no legacy classloader path. Minimum supported version to confirm — OQ-3.
+1. Cloud is never asked: it is not versioned, and no call is made.
+2. `GET <apiBaseUrl>/analysis/version` (authenticated).
+3. On failure, `GET <sonar.host.url>/api/server/version` — **only** to tell "too old" apart from
+   "misconfigured or unauthenticated". If that endpoint reports ≥ 10.6, the *original* failure is
+   reported instead, because a server new enough to serve the modern endpoint has a different problem.
+4. Server ≥ 10.6 ⇒ proceed. Older ⇒ **actionable error pointing at the CLI scanner**; we carry no
+   legacy classloader path. (OQ-3, settled by M2.)
+5. `sonar.scanner.internal.sqVersion` short-circuits the call for testing, and is gated like a real
+   version.
 
 ### 5.6 JRE resolution
 
@@ -484,10 +489,10 @@ an existing artifact — the guidelines, a reference implementation, or the serv
 |---|---|---|
 | OQ-1 | ~~Scanner identity~~ — **DECIDED: `sonar.scanner.app = "cargo"`**, per the guidelines' naming convention. (`ScannerCLI`/`ScannerMSBuild` are legacy spellings; pysonar already sends plain `"python"`.) Engine M0 hard-codes the identical string. Remaining action: announce the value before GA so telemetry dashboards and any server-side allow-lists learn it. | resolved |
 | OQ-2 | ~~**Configuration file names.**~~ **Settled by M1.** `sonar-project.properties` in the base dir and `<sonar.userHome>/sonar-scanner.properties`, both as proposed. The third part was decided the other way: `[package.metadata.sonar]` *is* read, and outranks `sonar-project.properties` — see M1's notes for why that does not reintroduce a split namespace. | resolved |
-| OQ-3 | **Minimum supported server version**, given no legacy bootstrap path. 10.6 is the protocol floor; the guidelines also say new scanners should support down to LTS 9.9, which we cannot without the legacy path — pysonar set the precedent of requiring a modern server. *(Recommendation: require 10.6 and follow pysonar; verify against what pysonar actually gates on.)* | M2 |
+| OQ-3 | ~~**Minimum supported server version.**~~ **DECIDED: 10.6**, implemented in `src/version.rs`. Verified against both reference implementations rather than assumed: the Java library's `SQ_VERSION_NEW_BOOTSTRAPPING` and pysonar's `MIN_SUPPORTED_SQ_VERSION` are both 10.6. Supporting LTS 9.9 would require the legacy classloader path, which we deliberately do not carry; an older server gets a message pointing at the SonarScanner CLI. | resolved |
 | OQ-4 | **Truststore / keystore.** v1 uses OS trust roots and merely forwards `sonar.scanner.truststorePath`/`keystorePath` to the engine (pysonar does the same). Acceptable, or must the bootstrapper itself honour a PKCS#12 truststore for its own API calls? *(Recommendation: forward only in v1; `native-tls` leaves the door open.)* | M2 scope |
 | OQ-5 | **Licensing and crates.io metadata.** The licence expression, contributor-rights model, required notices and public support expectations. The *publication pipeline* half of this question is answered: `sonartech` + Vault token + `gh-action_release`, see M5. What remains needs a licensing sign-off, which is not a technical decision. | M5 |
-| OQ-6 | **Cross-origin redirect credential policy** — the guidelines say auth is preserved on redirect, but that conflicts with "never leak the token to a third party" when the redirect leaves the origin. *(Recommendation: preserve same-origin, drop cross-origin; assert it in a test.)* | M2 |
+| OQ-6 | ~~**Cross-origin redirect credential policy.**~~ **DECIDED: origin-scoped**, implemented in `src/http.rs`. The token is sent only to origins matching the resolved `sonar.host.url`/`sonar.scanner.apiBaseUrl`, so a redirect to a CDN carries no credential. Redirects are followed by our own code, one hop at a time, because `ureq`'s `SameHost` policy ignores the port and would leak the token across two origins on the same host. Asserted by tests against a real socket. | resolved |
 | OQ-7 | **Log format.** Match `sonar-scanner-cli`'s exact output shape (`INFO: …`) — verify against the CLI's real output before freezing, since users grep it in CI. | M3 |
 
 ---
