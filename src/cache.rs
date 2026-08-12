@@ -203,6 +203,11 @@ impl Entry {
             // The directory moved: there is nothing left for the temporary to remove.
             Ok(()) => {
                 let _ = temporary.keep();
+                // The JRE that runs the analysis lives in here, so this is the directory a shared
+                // cache has to let other users through. What the extraction put inside keeps the
+                // modes the archive recorded.
+                shared(&target, DIRECTORY_MODE)
+                    .map_err(|source| CacheError::Install { path: target.clone(), source })?;
             }
             // Another scanner extracted the same archive first. Its copy is as good as ours.
             Err(_) if target.is_dir() => {
@@ -220,9 +225,8 @@ impl Entry {
 
     fn install(&self, temporary: NamedTempFile) -> crate::error::Result<Cached> {
         match temporary.persist_noclobber(&self.path) {
-            Ok(_) => {
-                readable_by_all(&self.path).map_err(|source| CacheError::Install { path: self.path.clone(), source })?
-            }
+            Ok(_) => shared(&self.path, FILE_MODE)
+                .map_err(|source| CacheError::Install { path: self.path.clone(), source })?,
             // Another scanner installed the same file first. It has the same checksum, so it is the
             // same file, and its copy is already visible to everyone else.
             Err(failure) if self.path.is_file() => {
@@ -237,17 +241,28 @@ impl Entry {
     }
 }
 
-/// A temporary file is private to its creator, but a cache can be shared between users — a CI image
-/// that ships a warm `SONAR_USER_HOME` is the usual case — so what is installed is world-readable.
+/// Mode of an installed file: readable by everyone, as a cache entry has to be.
 #[cfg(unix)]
-fn readable_by_all(path: &Path) -> io::Result<()> {
+const FILE_MODE: u32 = 0o644;
+/// Mode of an installed directory, which also has to be traversable to be of any use.
+#[cfg(unix)]
+const DIRECTORY_MODE: u32 = 0o755;
+#[cfg(not(unix))]
+const FILE_MODE: u32 = 0;
+#[cfg(not(unix))]
+const DIRECTORY_MODE: u32 = 0;
+
+/// What `tempfile` creates is private to its creator, but a cache can be shared between users — a CI
+/// image that ships a warm `SONAR_USER_HOME` is the usual case — so what is installed is opened up.
+#[cfg(unix)]
+fn shared(path: &Path, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
 }
 
 #[cfg(not(unix))]
-fn readable_by_all(_path: &Path) -> io::Result<()> {
+fn shared(_path: &Path, _mode: u32) -> io::Result<()> {
     Ok(())
 }
 
@@ -528,5 +543,28 @@ mod tests {
 
         let mode = std::fs::metadata(&cached.path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o644, "a temporary file is created 0600, which a shared cache cannot use");
+    }
+
+    /// The extracted directory, not the archive, is what the JRE is run from, so this is the one a
+    /// shared cache cannot do without.
+    #[cfg(unix)]
+    #[test]
+    fn installs_a_directory_the_whole_machine_can_enter() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = user_home();
+        let cache = Cache::new(home.path());
+        let entry = cache.entry("jre.tar.gz", HELLO_SHA256).unwrap();
+        entry.file(writes("hello")).unwrap();
+
+        let extracted = entry
+            .extracted(|_, into| {
+                std::fs::write(into.join("java"), "binary").unwrap();
+                Ok(())
+            })
+            .unwrap();
+
+        let mode = std::fs::metadata(&extracted.path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "a temporary directory is created 0700, which another user cannot enter");
     }
 }
