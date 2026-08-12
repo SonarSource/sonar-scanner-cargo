@@ -34,7 +34,7 @@ use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use log::debug;
+use log::{debug, warn};
 use sha2::{Digest as _, Sha256};
 use tempfile::{NamedTempFile, TempDir};
 use thiserror::Error;
@@ -85,11 +85,31 @@ pub enum CacheError {
 }
 
 impl CacheError {
-    /// Whether a fresh download produced the wrong bytes, which is worth one retry from the metadata
-    /// call: the artefact may have been republished between the two.
-    pub fn is_checksum_mismatch(&self) -> bool {
+    fn is_checksum_mismatch(&self) -> bool {
         matches!(self, CacheError::ChecksumMismatch { .. })
     }
+}
+
+/// Run `attempt` again, once, if what it downloaded did not match the checksum it was given.
+///
+/// The whole attempt is repeated, metadata call included, rather than just the download: an artefact
+/// republished between the metadata call and the download has a new checksum, so the one being
+/// compared against is stale and no number of downloads would ever match it.
+pub fn retrying_a_checksum_mismatch<T>(
+    mut attempt: impl FnMut() -> crate::error::Result<T>,
+) -> crate::error::Result<T> {
+    match attempt() {
+        Err(failure) if is_checksum_mismatch(&failure) => {
+            warn!("{failure}");
+            warn!("Asking the server again, in case the file was replaced while it was being downloaded");
+            attempt()
+        }
+        result => result,
+    }
+}
+
+fn is_checksum_mismatch(failure: &crate::error::ScannerError) -> bool {
+    matches!(failure, crate::error::ScannerError::Cache(error) if error.is_checksum_mismatch())
 }
 
 /// Where an artefact ended up, and whether the cache already had it.
@@ -391,7 +411,7 @@ mod tests {
                  {HELLO_SHA256}. The download is corrupted, or something in between altered it."
             )
         );
-        assert!(matches!(&failure, ScannerError::Cache(error) if error.is_checksum_mismatch()));
+        assert!(is_checksum_mismatch(&failure), "the caller has to be able to tell this failure apart: {failure}");
         assert!(!entry.path.exists(), "the corrupted download is not installed");
         assert_eq!(entries_of(&entry.dir), [] as [String; 0], "the corrupted download is not left behind either");
     }

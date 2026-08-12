@@ -154,26 +154,15 @@ fn provision(
     let api_base_url = endpoint.api_base_url.as_str();
     let url = format!("{api_base_url}{JRES_ENDPOINT}?os={}&arch={}", encoded(&platform.os), encoded(&platform.arch));
 
-    // Two attempts at most. A checksum mismatch is re-read from the metadata rather than retried
-    // against the same URL: if the JRE was republished between the two calls, the checksum we are
-    // comparing against is the stale one and no number of downloads will ever match it.
-    for attempt in 1..=2 {
+    crate::cache::retrying_a_checksum_mismatch(|| {
         // The server returns the JREs it considers usable, best first.
         let jres: Vec<Metadata> = client.get_json(&url)?;
         let Some(metadata) = jres.into_iter().next() else {
             return Ok(None);
         };
         debug!("The server offers the JRE {} ({})", metadata.filename, metadata.id);
-
-        match install(client, api_base_url, cache, &metadata) {
-            Err(failure) if attempt == 1 && is_checksum_mismatch(&failure) => {
-                warn!("{failure}");
-                warn!("Asking the server about the JRE again, in case it was republished mid-download");
-            }
-            result => return result.map(Some),
-        }
-    }
-    unreachable!("the loop returns on its second attempt")
+        install(client, api_base_url, cache, &metadata).map(Some)
+    })
 }
 
 fn install(client: &HttpClient, api_base_url: &str, cache: &Cache, metadata: &Metadata) -> crate::error::Result<Jre> {
@@ -215,10 +204,6 @@ fn install(client: &HttpClient, api_base_url: &str, cache: &Cache, metadata: &Me
     // extracted still cost this analysis the extraction.
     let cache_hit = if archive.hit && extracted.hit { CacheHit::Hit } else { CacheHit::Miss };
     Ok(Jre { java_exe, cache_hit })
-}
-
-fn is_checksum_mismatch(failure: &crate::error::ScannerError) -> bool {
-    matches!(failure, crate::error::ScannerError::Cache(error) if error.is_checksum_mismatch())
 }
 
 /// The Java runtime this machine already has, from `JAVA_HOME` or from the `PATH`.
