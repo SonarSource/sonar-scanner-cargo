@@ -38,6 +38,13 @@ pub const MINIMUM_SERVER_VERSION: &str = "10.6";
 const VERSION_ENDPOINT: &str = "/analysis/version";
 const LEGACY_VERSION_ENDPOINT: &str = "/api/server/version";
 
+/// Longest string still worth treating as a version. A server reports at most `2025.1.0.112345`.
+const MAX_VERSION_LENGTH: usize = 32;
+
+/// How much of an unexpected response body to quote back: enough to recognise a login page or a
+/// proxy error, not enough to fill the log with one.
+const QUOTED_BODY_LENGTH: usize = 60;
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VersionError {
     #[error(
@@ -46,6 +53,13 @@ pub enum VersionError {
          SonarScanner CLI: https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
     )]
     UnsupportedServer { version: String },
+
+    #[error(
+        "{url} answered with something that is not a server version: {body:?}. Check that this URL is a \
+         SonarQube Server, and that nothing on the way to it — a proxy, a captive portal — is answering \
+         in its place."
+    )]
+    NotAVersion { url: String, body: String },
 }
 
 /// The version of the target server, or `None` for SonarQube Cloud, which has none to report.
@@ -80,7 +94,11 @@ pub fn resolve(
 fn query(client: &HttpClient, endpoint: &Endpoint) -> crate::error::Result<String> {
     let url = format!("{}{VERSION_ENDPOINT}", endpoint.api_base_url.trim_end_matches('/'));
     let failure = match client.get_string(&url) {
-        Ok(version) => return Ok(trimmed(version)),
+        // An answer that is not a version means whatever replied is not this endpoint, so the
+        // fallback below has nothing to add: it would only ask the same wrong thing again.
+        Ok(body) => {
+            return version_in(&body).ok_or_else(|| VersionError::NotAVersion { url, body: quoted(&body) }.into());
+        }
         Err(failure) => failure,
     };
 
@@ -89,16 +107,36 @@ fn query(client: &HttpClient, endpoint: &Endpoint) -> crate::error::Result<Strin
     // "misconfigured or unauthenticated", and its answer is not trusted for anything else.
     debug!("{failure}. Falling back to {LEGACY_VERSION_ENDPOINT} to find out whether the server is simply too old");
     let legacy_url = format!("{}{LEGACY_VERSION_ENDPOINT}", endpoint.host_url.trim_end_matches('/'));
-    match client.get_string(&legacy_url) {
-        Ok(version) if !is_at_least(&trimmed(version.clone()), MINIMUM_SERVER_VERSION) => Ok(trimmed(version)),
-        // A server new enough to serve the modern endpoint failed to: report why it failed, because
-        // that is the real problem, and it would otherwise resurface later as a confusing error.
+    match client.get_string(&legacy_url).map(|body| version_in(&body)) {
+        Ok(Some(version)) if !is_at_least(&version, MINIMUM_SERVER_VERSION) => Ok(version),
+        // A server new enough to serve the modern endpoint failed to, or the answer here is not a
+        // version either: report why the call above failed, because that is the real problem, and it
+        // would otherwise resurface later as a confusing error.
         _ => Err(failure.into()),
     }
 }
 
-fn trimmed(version: String) -> String {
-    version.trim().to_string()
+/// The version a version endpoint reported, or `None` when the body is not one.
+///
+/// HTTP 200 is not proof that the server answered: a proxy, a captive portal or a login page will
+/// happily return one, and taking that body for a version reports it back as an unsupported server —
+/// pointing the user at their server when the problem is on the way to it.
+fn version_in(body: &str) -> Option<String> {
+    let version = body.trim();
+    let plausible = (1..=MAX_VERSION_LENGTH).contains(&version.len())
+        && version.starts_with(|first: char| first.is_ascii_digit())
+        && version.chars().all(|character| character.is_ascii_alphanumeric() || ".-_+".contains(character));
+    plausible.then(|| version.to_string())
+}
+
+/// A response body on one line and of bounded length, fit for an error message.
+fn quoted(body: &str) -> String {
+    let collapsed: Vec<&str> = body.split_whitespace().collect();
+    let collapsed = collapsed.join(" ");
+    match collapsed.char_indices().nth(QUOTED_BODY_LENGTH) {
+        Some((end, _)) => format!("{}…", &collapsed[..end]),
+        None => collapsed,
+    }
 }
 
 /// How to name a server of this version, mirroring the Java library: SonarQube Server numbers its
@@ -248,6 +286,51 @@ mod tests {
 
         assert!(error.to_string().contains("returned HTTP 500"), "{error}");
         assert!(error.to_string().contains(VERSION_ENDPOINT), "the modern endpoint is the one reported: {error}");
+    }
+
+    /// The captive-portal case: something answers 200 with a web page. Reporting that page as the
+    /// server version would send the user to upgrade a server that never saw the request.
+    #[test]
+    fn reports_a_body_that_is_not_a_version() {
+        let page = format!("<!DOCTYPE html>\n<html><body>{}</body></html>", "Sign in to the proxy. ".repeat(20));
+        let server = TestServer::always(Response::text(&page));
+
+        let error = resolve_against(&server, &[]).unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("answered with something that is not a server version"), "{message}");
+        assert!(message.contains("<!DOCTYPE html> <html><body>Sign in"), "the body is quoted on one line: {message}");
+        assert!(message.contains('…'), "a long body is cut short: {message}");
+        assert!(!message.contains("is not supported"), "this is not an old server: {message}");
+        assert!(message.len() < page.len(), "the whole page does not end up in the message: {message}");
+    }
+
+    /// Whatever answered the modern endpoint answers the legacy one too, so its body says no more
+    /// about the server than the first one did.
+    #[test]
+    fn does_not_take_a_legacy_body_that_is_not_a_version_for_an_old_server() {
+        let server = TestServer::start(|request| match request.path.as_str() {
+            LEGACY_VERSION_ENDPOINT => Response::text("<html>Sign in</html>"),
+            _ => Response::status(403),
+        });
+
+        let error = resolve_against(&server, &[]).unwrap_err();
+
+        assert!(error.to_string().starts_with("You don't have permission"), "the modern call is reported: {error}");
+    }
+
+    #[test]
+    fn recognises_a_body_shaped_like_a_version() {
+        assert_eq!(version_in("10.6").as_deref(), Some("10.6"));
+        assert_eq!(version_in(" 2025.1.0.112345\n").as_deref(), Some("2025.1.0.112345"));
+        assert_eq!(version_in("10.7-SNAPSHOT").as_deref(), Some("10.7-SNAPSHOT"));
+        // Too old to support is still a version: the caller decides what to do about it.
+        assert_eq!(version_in("9.9.4.87374").as_deref(), Some("9.9.4.87374"));
+        assert_eq!(version_in(""), None);
+        assert_eq!(version_in("   "), None);
+        assert_eq!(version_in("<html>error</html>"), None);
+        assert_eq!(version_in("10.6 and some prose"), None, "a version is one word");
+        assert_eq!(version_in(&"1".repeat(MAX_VERSION_LENGTH + 1)), None, "no version is that long");
     }
 
     #[test]
