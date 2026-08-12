@@ -7,10 +7,9 @@ $ export SONAR_TOKEN=...
 $ cargo sonar-scanner
 ```
 
-> **Status: work in progress.** This build is the crate skeleton and the command line interface
-> only. Configuration resolution, JRE and scanner engine provisioning, and the handoff to the
-> scanner engine are still to come, so `cargo sonar-scanner` currently stops with an explanatory
-> error. See SCANCARGO-2.
+> **Status: work in progress.** The bootstrapper is complete — configuration resolution, JRE and
+> scanner engine provisioning, and the handoff to the engine — but it has not been released yet, so
+> it has to be built from a checkout. See SCANCARGO-2.
 
 ## Install
 
@@ -135,6 +134,22 @@ bootstrapper deliberately does **not** walk up looking for a workspace root, so 
 inside a member crate analyses that member. Everything Cargo-specific — workspaces, targets, build
 output — is the scanner engine's job.
 
+## What an analysis does
+
+1. Asks the server for its version, which is also the first check of the endpoint and the token.
+   SonarQube Server must be 10.6 or newer; SonarQube Cloud is never asked.
+2. Provisions a JRE for this platform, unless one is named with `sonar.scanner.javaExePath` or
+   provisioning is turned off with `sonar.scanner.skipJreProvisioning=true`, in which case `java`
+   comes from `JAVA_HOME` or from `PATH`.
+3. Downloads the scanner engine the server wants, unless one is named with
+   `sonar.scanner.engineJarPath`.
+4. Runs `<java> <sonar.scanner.javaOpts> -jar <engine>`, hands the resolved properties to it on
+   standard input, and relays its log output.
+
+Both downloads are checksum-verified and cached under `<sonar.userHome>/cache`, so later analyses
+on the same machine reuse them. A checksum mismatch is retried once from the metadata call, because
+an artefact republished mid-download makes the checksum being compared against the stale one.
+
 ## Properties set by the scanner
 
 `sonar.scanner.app` (`cargo`), `sonar.scanner.appVersion` and `sonar.scanner.bootstrapStartTime` are
@@ -150,8 +165,12 @@ They are of course present in the payload handed to the scanner engine, includin
 
 ## Output streams
 
-`INFO`, `WARN`, `DEBUG` and the dry-run dump go to stdout; `ERROR` goes to stderr. The exit code is
-`0` on success and `1` on failure. A malformed command line is a usage error and exits `2`.
+`INFO`, `WARN`, `DEBUG` and the dry-run dump go to stdout; `ERROR` goes to stderr. The engine's log
+records are re-emitted at their own levels, so they are indistinguishable from the bootstrapper's;
+anything the engine writes to its standard error is reported as `ERROR`.
+
+The exit code is `0` on success and `1` on a bootstrap failure. Once the engine runs, its exit code
+becomes ours. A malformed command line is a usage error and exits `2`.
 
 ## Development
 

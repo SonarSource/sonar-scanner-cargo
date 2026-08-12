@@ -416,6 +416,12 @@ mod tests {
         assert_eq!(entries_of(&entry.dir), [] as [String; 0], "the corrupted download is not left behind either");
     }
 
+    /// A stand-in for a failure inside the closure. Which failure it is does not matter here, only
+    /// that it reaches the caller and that the cache is left as it was.
+    fn interrupted(message: &str) -> ScannerError {
+        ScannerError::FileWrite { path: PathBuf::from("/artifact"), source: io::Error::other(message.to_string()) }
+    }
+
     #[test]
     fn leaves_nothing_behind_when_the_download_fails() {
         let home = user_home();
@@ -425,11 +431,11 @@ mod tests {
         let failure = entry
             .file(|sink| {
                 sink.write_all(b"hel").unwrap();
-                Err(ScannerError::NotImplemented("the connection dropped".to_string()))
+                Err(interrupted("the connection dropped"))
             })
             .unwrap_err();
 
-        assert_eq!(failure.to_string(), "the connection dropped");
+        assert!(failure.to_string().ends_with("the connection dropped"), "{failure}");
         assert!(!entry.path.exists());
         assert_eq!(entries_of(&entry.dir), [] as [String; 0]);
     }
@@ -502,11 +508,11 @@ mod tests {
         let failure = entry
             .extracted(|_, into| {
                 std::fs::write(into.join("half-a-jre"), "truncated").unwrap();
-                Err(ScannerError::NotImplemented("the archive is not an archive".to_string()))
+                Err(interrupted("the archive is not an archive"))
             })
             .unwrap_err();
 
-        assert_eq!(failure.to_string(), "the archive is not an archive");
+        assert!(failure.to_string().ends_with("the archive is not an archive"), "{failure}");
         assert_eq!(entries_of(&entry.dir), ["jre.tar.gz"], "a half-extracted directory is never left in the cache");
     }
 

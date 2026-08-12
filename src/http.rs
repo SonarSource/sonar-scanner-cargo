@@ -133,19 +133,6 @@ pub enum HttpError {
     },
 }
 
-impl HttpError {
-    /// The HTTP status behind this failure, when there was a response at all. The version check
-    /// needs it to decide whether to fall back to the legacy endpoint.
-    pub fn status(&self) -> Option<u16> {
-        match self {
-            HttpError::Unauthorized(_) => Some(401),
-            HttpError::Forbidden(_) => Some(403),
-            HttpError::Status { status, .. } => Some(*status),
-            _ => None,
-        }
-    }
-}
-
 pub struct HttpClient {
     agent: Agent,
     token: Option<String>,
@@ -537,7 +524,7 @@ mod tests {
 
         let error = client.get_string(&server.url("/api/v2/analysis/engine")).unwrap_err();
 
-        assert_eq!(error.status(), Some(302));
+        assert!(error.to_string().ends_with("returned HTTP 302"), "{error}");
     }
 
     /// Resolution is the `url` crate's; what this pins down is the set of `Location` shapes the
@@ -597,7 +584,6 @@ mod tests {
         let error = client.get_json::<serde_json::Value>(&server.url("/api/v2/analysis/engine")).unwrap_err();
 
         assert!(error.to_string().contains("as JSON"), "{error}");
-        assert_eq!(error.status(), None);
     }
 
     /// A peer that answers the head and then goes quiet must not hang the analysis. One second is the
@@ -669,7 +655,7 @@ mod tests {
                 server.base_url()
             )
         );
-        assert_eq!(error.status(), Some(401));
+        assert!(matches!(error, HttpError::Unauthorized(_)), "{error:?}");
     }
 
     #[test]
@@ -698,7 +684,7 @@ mod tests {
             error.to_string(),
             "You don't have permission to execute an analysis on this SonarQube Server instance."
         );
-        assert_eq!(error.status(), Some(403));
+        assert!(matches!(error, HttpError::Forbidden(_)), "{error:?}");
         assert_eq!(
             forbidden(&cloud_client("https://sonarcloud.io", "")),
             "You don't have permission to execute an analysis in any organization on SonarQube Cloud."
@@ -716,7 +702,6 @@ mod tests {
 
         let error = client.get_string(&server.url("/api/v2/analysis/version")).unwrap_err();
 
-        assert_eq!(error.status(), Some(503));
         assert!(error.to_string().contains("returned HTTP 503"), "{error}");
     }
 
@@ -728,7 +713,6 @@ mod tests {
         let error = client.get_string("http://127.0.0.1:1/api/v2/analysis/version").unwrap_err();
 
         assert!(error.to_string().starts_with("Failed to call http://127.0.0.1:1/"), "{error}");
-        assert_eq!(error.status(), None);
     }
 
     /// A trailing slash on `sonar.host.url` must not double up in the message. The client leans on the

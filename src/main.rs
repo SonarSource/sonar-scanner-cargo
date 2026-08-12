@@ -17,28 +17,21 @@
 //! `cargo sonar-scanner` — the SonarScanner bootstrapper for Cargo projects.
 
 mod archive;
-#[cfg_attr(not(test), expect(dead_code, reason = "consumed by the JRE and engine provisioning, milestone M2"))]
 mod cache;
 mod cli;
 mod config;
 mod dryrun;
 mod endpoint;
-#[cfg_attr(not(test), expect(dead_code, reason = "wired in with the engine handoff, milestone M3"))]
 mod engine;
 mod error;
-// The client is exercised by its own tests; the provisioning modules that call it land next (M2).
-#[cfg_attr(not(test), expect(dead_code, reason = "consumed by the version check and the provisioning"))]
 mod http;
-#[cfg_attr(not(test), expect(dead_code, reason = "wired in with the engine handoff, milestone M3"))]
 mod jre;
 mod logging;
 mod payload;
 mod platform;
-#[cfg_attr(not(test), expect(dead_code, reason = "wired in with the engine handoff, milestone M3"))]
 mod process;
 #[cfg(test)]
 mod test_server;
-#[cfg_attr(not(test), expect(dead_code, reason = "wired in with the engine handoff, milestone M3"))]
 mod version;
 
 use std::collections::BTreeMap;
@@ -107,13 +100,19 @@ fn run(cli: &Cli, start_time_ms: u128) -> Result<ExitCode> {
         return dump_to_file(&config, path).map(|()| ExitCode::SUCCESS);
     }
 
-    // Provisioning and the engine handoff are not implemented yet.
-    Err(ScannerError::NotImplemented(
-        "Running an analysis is not implemented yet: this build resolves the configuration only. \
-         Use --dry-run to inspect the resolved properties, or -Dsonar.scanner.internal.dumpToFile=<path> \
-         to write the payload that would be sent to the scanner engine."
-            .to_string(),
-    ))
+    let client = http::HttpClient::new(&config.properties, &endpoint)?;
+    // First call of the analysis, and the one whose error message the user sees when the endpoint or
+    // the token is wrong. It also rules out a server too old to provision an engine at all.
+    version::resolve(&client, &config.properties, &endpoint)?;
+
+    let cache = cache::Cache::new(&config.user_home);
+    let jre = jre::resolve(&client, &config.properties, &endpoint, &platform, &cache, &env)?;
+    let engine = engine::resolve(&client, &config.properties, &endpoint, &cache)?;
+    // The engine forwards both as analysis telemetry, so they are properties like any other.
+    config.set_resolved(jre::WAS_JRE_CACHE_HIT, jre.cache_hit.as_str());
+    config.set_resolved(engine::WAS_ENGINE_CACHE_HIT, &engine.cache_hit.to_string());
+
+    process::run(&jre.java_exe, &engine.jar, &config.properties)
 }
 
 /// Report the whole resolution at DEBUG, so that `--verbose` answers "where did that value come

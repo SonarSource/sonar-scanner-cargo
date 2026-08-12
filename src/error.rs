@@ -73,9 +73,6 @@ pub enum ScannerError {
          or the SONAR_USER_HOME environment variable."
     )]
     NoHomeDirectory,
-
-    #[error("{0}")]
-    NotImplemented(String),
 }
 
 pub type Result<T> = std::result::Result<T, ScannerError>;
