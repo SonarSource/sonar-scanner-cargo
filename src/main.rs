@@ -23,6 +23,8 @@ mod cli;
 mod config;
 mod dryrun;
 mod endpoint;
+#[cfg_attr(not(test), expect(dead_code, reason = "wired in with the engine handoff, milestone M3"))]
+mod engine;
 mod error;
 // The client is exercised by its own tests; the provisioning modules that call it land next (M2).
 #[cfg_attr(not(test), expect(dead_code, reason = "consumed by the version check and the provisioning"))]

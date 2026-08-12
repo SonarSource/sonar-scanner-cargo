@@ -51,6 +51,9 @@ pub enum ScannerError {
     Endpoint(#[from] crate::endpoint::EndpointError),
 
     #[error("{0}")]
+    Engine(#[from] crate::engine::EngineError),
+
+    #[error("{0}")]
     Http(#[from] crate::http::HttpError),
 
     #[error("{0}")]
