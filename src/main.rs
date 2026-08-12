@@ -29,6 +29,8 @@ mod payload;
 mod platform;
 #[cfg(test)]
 mod test_server;
+#[cfg_attr(not(test), expect(dead_code, reason = "wired in with the engine handoff, milestone M3"))]
+mod version;
 
 use std::collections::BTreeMap;
 use std::path::Path;

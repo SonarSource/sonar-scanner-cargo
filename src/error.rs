@@ -47,6 +47,9 @@ pub enum ScannerError {
     #[error("{0}")]
     Http(#[from] crate::http::HttpError),
 
+    #[error("{0}")]
+    Version(#[from] crate::version::VersionError),
+
     #[error("Unable to determine the current directory: {0}")]
     CurrentDir(std::io::Error),
 

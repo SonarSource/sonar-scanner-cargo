@@ -1,0 +1,282 @@
+/*
+ * SonarScanner for Cargo
+ * Copyright (C) SonarSource Sàrl
+ * mailto:info AT sonarsource DOT com
+ *
+ * You can redistribute and/or modify this program under the terms of
+ * the Sonar Source-Available License Version 1, as published by SonarSource Sàrl.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the Sonar Source-Available License for more details.
+ *
+ * You should have received a copy of the Sonar Source-Available License
+ * along with this program; if not, see https://sonarsource.com/license/ssal/
+ */
+//! The server version check: the first HTTP call of an analysis, and the gate that decides whether
+//! this bootstrapper can talk to the target at all.
+//!
+//! SonarQube Cloud is not versioned and is never asked. For SonarQube Server the version decides
+//! whether the engine can be provisioned over the API: 10.6 introduced the endpoints this
+//! bootstrapper uses, and there is no legacy path to fall back on, so an older server is refused
+//! with a pointer at the scanner that still supports it.
+
+use log::{debug, info};
+use thiserror::Error;
+
+use crate::config::Properties;
+use crate::endpoint::Endpoint;
+use crate::http::HttpClient;
+
+/// Testing hook: the server version to assume, which skips the HTTP call altogether.
+pub const SQ_VERSION: &str = "sonar.scanner.internal.sqVersion";
+
+/// The first SonarQube Server version serving `/api/v2/analysis/*`.
+pub const MINIMUM_SERVER_VERSION: &str = "10.6";
+
+const VERSION_ENDPOINT: &str = "/analysis/version";
+const LEGACY_VERSION_ENDPOINT: &str = "/api/server/version";
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum VersionError {
+    #[error(
+        "SonarQube Server {version} is not supported. This scanner requires {MINIMUM_SERVER_VERSION} or later, \
+         because it provisions the analysis engine over the API. To analyse with an older server, use the \
+         SonarScanner CLI: https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
+    )]
+    UnsupportedServer { version: String },
+}
+
+/// The version of the target server, or `None` for SonarQube Cloud, which has none to report.
+///
+/// Fails when the server is too old, or when the version cannot be obtained at all — an
+/// unauthenticated or unreachable server is reported here rather than at the next call, because this
+/// is the first call and its error message is the one the user sees.
+pub fn resolve(
+    client: &HttpClient,
+    properties: &Properties,
+    endpoint: &Endpoint,
+) -> crate::error::Result<Option<String>> {
+    if endpoint.is_cloud {
+        debug!("Skipping the server version check: {} is not versioned", endpoint.product());
+        return Ok(None);
+    }
+    let version = match properties.get_non_blank(SQ_VERSION) {
+        Some(simulated) => {
+            debug!("Assuming server version {simulated} from '{SQ_VERSION}', no version call is made");
+            simulated.to_string()
+        }
+        None => query(client, endpoint)?,
+    };
+
+    if !is_at_least(&version, MINIMUM_SERVER_VERSION) {
+        return Err(VersionError::UnsupportedServer { version }.into());
+    }
+    info!("Communicating with {} {version}", product_of(&version));
+    Ok(Some(version))
+}
+
+fn query(client: &HttpClient, endpoint: &Endpoint) -> crate::error::Result<String> {
+    let url = format!("{}{VERSION_ENDPOINT}", endpoint.api_base_url.trim_end_matches('/'));
+    let failure = match client.get_string(&url) {
+        Ok(version) => return Ok(trimmed(version)),
+        Err(failure) => failure,
+    };
+
+    // Every server this bootstrapper supports serves the endpoint above, so a failure there is
+    // meaningful. The legacy endpoint is called only to tell "too old to support" apart from
+    // "misconfigured or unauthenticated", and its answer is not trusted for anything else.
+    debug!("{failure}. Falling back to {LEGACY_VERSION_ENDPOINT} to find out whether the server is simply too old");
+    let legacy_url = format!("{}{LEGACY_VERSION_ENDPOINT}", endpoint.host_url.trim_end_matches('/'));
+    match client.get_string(&legacy_url) {
+        Ok(version) if !is_at_least(&trimmed(version.clone()), MINIMUM_SERVER_VERSION) => Ok(trimmed(version)),
+        // A server new enough to serve the modern endpoint failed to: report why it failed, because
+        // that is the real problem, and it would otherwise resurface later as a confusing error.
+        _ => Err(failure.into()),
+    }
+}
+
+fn trimmed(version: String) -> String {
+    version.trim().to_string()
+}
+
+/// How to name a server of this version, mirroring the Java library: SonarQube Server numbers its
+/// releases by year, the Community Build by the sequence in between.
+fn product_of(version: &str) -> &'static str {
+    match major(version) {
+        Some(major) if (11..2025).contains(&major) => "SonarQube Community Build",
+        _ => "SonarQube Server",
+    }
+}
+
+/// Whether `version` is at least `target`, ignoring any `-qualifier` suffix.
+///
+/// Both are dotted numbers, of any length: a server reports `10.6`, `2025.1.0.112345` or
+/// `25.5.0.107428`. A non-numeric component compares as 0, which is enough for versions of that
+/// shape and keeps a surprising build suffix from failing an analysis.
+fn is_at_least(version: &str, target: &str) -> bool {
+    let version = version.trim();
+    if !version.starts_with(|first: char| first.is_ascii_digit()) {
+        return false;
+    }
+    let version = version.split_once('-').map_or(version, |(release, _qualifier)| release);
+    components(version) >= components(target)
+}
+
+fn components(version: &str) -> Vec<u64> {
+    version.split('.').map(|component| component.parse().unwrap_or_default()).collect()
+}
+
+fn major(version: &str) -> Option<u64> {
+    let version = version.trim();
+    version.split(['.', '-']).next()?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TOKEN;
+    use crate::test_server::{Response, TestServer};
+
+    fn endpoint_of(server: &TestServer) -> Endpoint {
+        Endpoint {
+            host_url: server.base_url(),
+            api_base_url: format!("{}/api/v2", server.base_url()),
+            is_cloud: false,
+            region: String::new(),
+        }
+    }
+
+    fn properties(pairs: &[(&str, &str)]) -> Properties {
+        pairs.iter().map(|(key, value)| ((*key).to_string(), (*value).to_string())).collect()
+    }
+
+    /// Resolve against a server, with the token set so the authenticated call is exercised.
+    fn resolve_against(server: &TestServer, pairs: &[(&str, &str)]) -> crate::error::Result<Option<String>> {
+        let endpoint = endpoint_of(server);
+        let properties = properties(&[&[(TOKEN, "s3cr3t")], pairs].concat());
+        let client = HttpClient::new(&properties, &endpoint).unwrap();
+        resolve(&client, &properties, &endpoint)
+    }
+
+    #[test]
+    fn reads_the_version_from_the_analysis_endpoint() {
+        let server = TestServer::always(Response::text("2025.1.0.112345\n"));
+
+        let version = resolve_against(&server, &[]).unwrap();
+
+        assert_eq!(version.as_deref(), Some("2025.1.0.112345"), "the body is trimmed");
+        let request = server.last_request();
+        assert_eq!(request.path, "/api/v2/analysis/version");
+        assert_eq!(request.header("authorization"), Some("Bearer s3cr3t"));
+    }
+
+    #[test]
+    fn does_not_ask_sonarqube_cloud_for_a_version() {
+        let server = TestServer::always(Response::text("should not be called"));
+        let endpoint = Endpoint {
+            host_url: "https://sonarcloud.io".to_string(),
+            api_base_url: server.base_url(),
+            is_cloud: true,
+            region: String::new(),
+        };
+        let client = HttpClient::new(&Properties::new(), &endpoint).unwrap();
+
+        assert_eq!(resolve(&client, &Properties::new(), &endpoint).unwrap(), None);
+        assert!(server.requests().is_empty(), "SonarQube Cloud has no version to check");
+    }
+
+    #[test]
+    fn the_simulated_version_replaces_the_call() {
+        let server = TestServer::always(Response::text("should not be called"));
+
+        let version = resolve_against(&server, &[(SQ_VERSION, "2025.4")]).unwrap();
+
+        assert_eq!(version.as_deref(), Some("2025.4"));
+        assert!(server.requests().is_empty(), "the version hook exists to avoid the call");
+    }
+
+    #[test]
+    fn a_simulated_version_is_gated_like_a_real_one() {
+        let server = TestServer::always(Response::text("should not be called"));
+
+        let error = resolve_against(&server, &[(SQ_VERSION, "9.9")]).unwrap_err();
+
+        assert!(error.to_string().starts_with("SonarQube Server 9.9 is not supported."), "{error}");
+    }
+
+    #[test]
+    fn falls_back_to_the_legacy_endpoint_to_recognise_an_old_server() {
+        let server = TestServer::start(|request| match request.path.as_str() {
+            LEGACY_VERSION_ENDPOINT => Response::text("9.9.4.87374"),
+            // Before 10.6 the modern endpoint does not exist.
+            _ => Response::status(404),
+        });
+
+        let error = resolve_against(&server, &[]).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "SonarQube Server 9.9.4.87374 is not supported. This scanner requires 10.6 or later, because it \
+                 provisions the analysis engine over the API. To analyse with an older server, use the SonarScanner \
+                 CLI: https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
+            )
+        );
+    }
+
+    /// A modern server that fails the modern endpoint has a different problem, and saying "too old"
+    /// would send the user looking in the wrong place.
+    #[test]
+    fn reports_the_original_failure_when_the_legacy_endpoint_reports_a_supported_version() {
+        let server = TestServer::start(|request| match request.path.as_str() {
+            LEGACY_VERSION_ENDPOINT => Response::text("2025.1.0.112345"),
+            _ => Response::status(401),
+        });
+
+        let error = resolve_against(&server, &[]).unwrap_err();
+
+        assert!(error.to_string().starts_with("Unable to authenticate on SonarQube Server."), "{error}");
+    }
+
+    #[test]
+    fn reports_the_original_failure_when_neither_endpoint_answers() {
+        let server = TestServer::always(Response::status(500));
+
+        let error = resolve_against(&server, &[]).unwrap_err();
+
+        assert!(error.to_string().contains("returned HTTP 500"), "{error}");
+        assert!(error.to_string().contains(VERSION_ENDPOINT), "the modern endpoint is the one reported: {error}");
+    }
+
+    #[test]
+    fn accepts_the_minimum_version() {
+        let server = TestServer::always(Response::text(MINIMUM_SERVER_VERSION));
+
+        assert_eq!(resolve_against(&server, &[]).unwrap().as_deref(), Some("10.6"));
+    }
+
+    #[test]
+    fn compares_versions_ignoring_the_qualifier() {
+        assert!(is_at_least("10.6", "10.6"));
+        assert!(is_at_least("10.6.0.92116", "10.6"));
+        assert!(is_at_least("2025.1.0.112345", "10.6"));
+        assert!(is_at_least("25.5.0.107428", "10.6"));
+        assert!(is_at_least("10.7-SNAPSHOT", "10.6"));
+        assert!(!is_at_least("10.5.1.90531", "10.6"));
+        assert!(!is_at_least("9.9.4.87374", "10.6"));
+        assert!(!is_at_least("10.6-SNAPSHOT", "10.6.1"));
+        // Anything not starting with a digit is not a version we can reason about.
+        assert!(!is_at_least("", "10.6"));
+        assert!(!is_at_least("<html>error</html>", "10.6"));
+    }
+
+    #[test]
+    fn names_the_product_from_the_version() {
+        assert_eq!(product_of("2025.1.0.112345"), "SonarQube Server");
+        assert_eq!(product_of("10.6"), "SonarQube Server");
+        assert_eq!(product_of("25.5.0.107428"), "SonarQube Community Build");
+        assert_eq!(product_of("nonsense"), "SonarQube Server");
+    }
+}
