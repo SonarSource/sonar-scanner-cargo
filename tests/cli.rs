@@ -245,12 +245,16 @@ fn a_malformed_define_is_rejected() {
     assert!(run.stderr.contains("expected key=value"), "{}", run.stderr);
 }
 
+/// An analysis starts by talking to the server, so an unreachable one is what a run without a
+/// server reports. Port 1 is where nothing listens: no analysis leaves this test.
 #[test]
-fn running_an_analysis_reports_that_it_is_not_implemented_yet() {
+fn running_an_analysis_contacts_the_server() {
     let dir = tempdir();
-    let run = run(dir.path(), &[], &["sonar-scanner"]);
+    let token = format!("-Dsonar.token={FAKE_TOKEN}");
+    let run = run(dir.path(), &[], &["sonar-scanner", "-Dsonar.host.url=http://127.0.0.1:1", &token]);
     run.assert_failure();
-    assert!(run.stderr.contains("not implemented yet"), "{}", run.stderr);
+    assert!(run.stderr.contains("http://127.0.0.1:1"), "{}", run.stderr);
+    assert!(run.stderr.contains("EXECUTION FAILURE"), "{}", run.stderr);
 }
 
 #[test]
