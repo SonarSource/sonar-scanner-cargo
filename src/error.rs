@@ -54,6 +54,9 @@ pub enum ScannerError {
     Http(#[from] crate::http::HttpError),
 
     #[error("{0}")]
+    Jre(#[from] crate::jre::JreError),
+
+    #[error("{0}")]
     Version(#[from] crate::version::VersionError),
 
     #[error("Unable to determine the current directory: {0}")]
