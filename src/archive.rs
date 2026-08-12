@@ -259,6 +259,14 @@ fn restore_symlink(
     Ok(())
 }
 
+/// Whether a relative path stays within the directory it is resolved against.
+///
+/// For a path that is only read, rather than a link that is created: no extraction has happened
+/// yet, so there is no symlink to account for.
+pub(crate) fn is_inside(path: &Path) -> bool {
+    link_stays_inside(Path::new(""), path, &HashSet::new())
+}
+
 /// Whether `link`, resolved against the directory `from` that holds it, stays inside the extraction
 /// root — `bin/java -> ../lib/java` does, `bin/x -> ../../etc/passwd` does not.
 ///
@@ -320,7 +328,7 @@ fn set_mode(_path: &Path, _mode: Option<u32>) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::Write;
 
@@ -332,7 +340,7 @@ mod tests {
     }
 
     /// A `.tar.gz` of the given entries, as `(path, contents, mode)`.
-    fn tar_gz(dir: &Path, name: &str, entries: &[(&str, &str, u32)]) -> PathBuf {
+    pub(crate) fn tar_gz(dir: &Path, name: &str, entries: &[(&str, &str, u32)]) -> PathBuf {
         let path = dir.join(name);
         let gzip = flate2::write::GzEncoder::new(File::create(&path).unwrap(), flate2::Compression::fast());
         let mut builder = tar::Builder::new(gzip);
