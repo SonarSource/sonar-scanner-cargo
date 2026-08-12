@@ -23,9 +23,10 @@
 //!
 //! - **Permissions survive on unix.** A JRE whose `bin/java` is not executable is useless, and a
 //!   `.tar.gz` is exactly the format that carries the bit.
-//! - **No entry escapes the target directory.** The archive is checksum-verified against what an
-//!   authenticated server reported, so this is defence in depth rather than the first line of it: an
-//!   entry that points outside is skipped with a warning, not extracted and not fatal.
+//! - **No entry escapes the target directory, and no symlink points out of it.** The archive is
+//!   checksum-verified against what an authenticated server reported, so this is defence in depth
+//!   rather than the first line of it: an entry that points outside is skipped with a warning, not
+//!   extracted and not fatal.
 
 use std::fs::File;
 use std::io::{self, BufReader};
@@ -80,6 +81,23 @@ fn untar(archive: &Path, into: &Path) -> io::Result<()> {
     for entry in tar.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
+
+        // `unpack_in` validates the path of every entry, and the target of a hard link, but a symlink
+        // is created with the target the archive gave verbatim. Nothing is written through it — that
+        // is what the path validation prevents — but the link would still be left in the cache
+        // pointing out of it, so it gets the check the zip path applies.
+        if entry.header().entry_type().is_symlink()
+            && let Some(link) = entry.link_name()?
+            && !is_inside(&path.parent().unwrap_or(Path::new("")).join(&link))
+        {
+            warn!(
+                "Skipping the symlink {} from {}: it points outside the target directory",
+                path.display(),
+                archive.display()
+            );
+            continue;
+        }
+
         // `unpack_in` is what refuses to leave `into`; it reports a skipped entry rather than failing.
         if !entry.unpack_in(into)? {
             warn!(
@@ -277,26 +295,57 @@ mod tests {
         assert_eq!(mode("release"), 0o644);
     }
 
+    /// A `.tar.gz` of the given symlinks, as `(path, target)`.
+    fn tar_gz_of_symlinks(dir: &Path, name: &str, links: &[(&str, &str)]) -> PathBuf {
+        let path = dir.join(name);
+        let gzip = flate2::write::GzEncoder::new(File::create(&path).unwrap(), flate2::Compression::fast());
+        let mut builder = tar::Builder::new(gzip);
+        for (name, target) in links {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            builder.append_link(&mut header, name, target).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+        path
+    }
+
     #[cfg(unix)]
     #[test]
     fn restores_a_symlink_from_a_tar_gz() {
         let dir = tempdir();
-        let path = dir.path().join("jre.tgz");
-        let gzip = flate2::write::GzEncoder::new(File::create(&path).unwrap(), flate2::Compression::fast());
-        let mut builder = tar::Builder::new(gzip);
-        let mut header = tar::Header::new_gnu();
-        header.set_entry_type(tar::EntryType::Symlink);
-        header.set_size(0);
-        header.set_mode(0o777);
-        builder.append_link(&mut header, "bin/java", "../lib/java").unwrap();
-        builder.into_inner().unwrap().finish().unwrap();
+        let archive = tar_gz_of_symlinks(dir.path(), "jre.tgz", &[("bin/java", "../lib/java")]);
         let into = dir.path().join("into");
         std::fs::create_dir(&into).unwrap();
 
-        extract(&path, &into).unwrap();
+        extract(&archive, &into).unwrap();
 
         let link = std::fs::read_link(into.join("bin/java")).unwrap();
         assert_eq!(link, Path::new("../lib/java"), ".tgz is accepted as well");
+    }
+
+    /// `unpack_in` refuses an entry *path* that escapes, but creates a symlink with whatever target
+    /// the archive gave it, so this is the tar counterpart of the zip check below.
+    #[cfg(unix)]
+    #[test]
+    fn skips_a_tar_symlink_that_escapes_the_target() {
+        let dir = tempdir();
+        let archive = tar_gz_of_symlinks(
+            dir.path(),
+            "jre.tar.gz",
+            &[("bin/java", "../lib/java"), ("bin/escape", "../../../../etc/passwd"), ("bin/absolute", "/etc/passwd")],
+        );
+        let into = dir.path().join("into");
+        std::fs::create_dir(&into).unwrap();
+
+        extract(&archive, &into).unwrap();
+
+        assert_eq!(std::fs::read_link(into.join("bin/java")).unwrap(), Path::new("../lib/java"));
+        // `symlink_metadata` rather than `exists`, which follows the link and so cannot tell a
+        // skipped symlink from one that was created and dangles.
+        assert!(into.join("bin/escape").symlink_metadata().is_err(), "a symlink out of the target is not created");
+        assert!(into.join("bin/absolute").symlink_metadata().is_err(), "nor is an absolute one");
     }
 
     #[test]
