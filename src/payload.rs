@@ -43,7 +43,6 @@ impl ScannerPayload {
     }
 
     /// Compact form: what the engine reads on stdin.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the engine handoff, milestone M3"))]
     pub fn to_json(&self) -> String {
         // Serialising a map of strings cannot fail.
         serde_json::to_string(self).expect("failed to serialise the scanner payload")
