@@ -60,6 +60,9 @@ pub enum ScannerError {
     Jre(#[from] crate::jre::JreError),
 
     #[error("{0}")]
+    Process(#[from] crate::process::ProcessError),
+
+    #[error("{0}")]
     Version(#[from] crate::version::VersionError),
 
     #[error("Unable to determine the current directory: {0}")]

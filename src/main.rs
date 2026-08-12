@@ -34,6 +34,8 @@ mod jre;
 mod logging;
 mod payload;
 mod platform;
+#[cfg_attr(not(test), expect(dead_code, reason = "wired in with the engine handoff, milestone M3"))]
+mod process;
 #[cfg(test)]
 mod test_server;
 #[cfg_attr(not(test), expect(dead_code, reason = "wired in with the engine handoff, milestone M3"))]
