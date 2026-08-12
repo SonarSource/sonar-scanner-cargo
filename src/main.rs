@@ -16,6 +16,8 @@
  */
 //! `cargo sonar-scanner` — the SonarScanner bootstrapper for Cargo projects.
 
+#[cfg_attr(not(test), expect(dead_code, reason = "consumed by the JRE provisioning, milestone M2"))]
+mod archive;
 #[cfg_attr(not(test), expect(dead_code, reason = "consumed by the JRE and engine provisioning, milestone M2"))]
 mod cache;
 mod cli;

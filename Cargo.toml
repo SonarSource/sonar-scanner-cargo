@@ -33,12 +33,16 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
+# The pure-Rust inflate backend: the release build cross-compiles, and a C dependency would need a
+# toolchain per target.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 # Used by the cache to write a downloaded artefact beside its final location: `O_EXCL` creation,
 # removal on every failure path, and a no-clobber rename are all needed and all platform-specific.
+tar = "0.4"
 tempfile = "3"
 thiserror = "2"
 toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
@@ -49,6 +53,9 @@ ureq = { version = "3", default-features = false, features = ["native-tls", "gzi
 # Resolving a `Location` header and comparing origins are both RFC 3986 problems, and the token rule
 # in src/http.rs depends on getting them right. Neither is worth reimplementing.
 url = "2"
+# Deflate is the only method a JRE archive uses; the rest of the compression zoo stays out of the
+# binary, and out of the dependency audit.
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]
 strip = true
