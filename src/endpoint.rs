@@ -37,6 +37,8 @@ struct CloudRegion {
     api_base_url: &'static str,
 }
 
+/// The URLs here are normalised on the way in: [`resolve`] strips any trailing slash, so that callers
+/// building a URL on top of one can append a path without trimming first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     /// Value of `sonar.host.url` as handed to the engine — always set, including for Cloud.

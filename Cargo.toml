@@ -42,6 +42,9 @@ toml = { version = "1.1", default-features = false, features = ["parse", "serde"
 # TLS-intercepting proxy work without extra configuration. The client pins the root certificates to
 # the platform verifier, see src/http.rs.
 ureq = { version = "3", default-features = false, features = ["native-tls", "gzip"] }
+# Resolving a `Location` header and comparing origins are both RFC 3986 problems, and the token rule
+# in src/http.rs depends on getting them right. Neither is worth reimplementing.
+url = "2"
 
 [profile.release]
 strip = true
