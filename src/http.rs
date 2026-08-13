@@ -44,7 +44,8 @@ use crate::endpoint::Endpoint;
 
 /// Seconds to wait for the TCP connection and the TLS handshake.
 pub const CONNECT_TIMEOUT: &str = "sonar.scanner.connectTimeout";
-/// Seconds to wait for the response head once the request has been sent.
+/// Seconds to wait for the response head once the request has been sent, and for the body of
+/// everything but a download.
 pub const SOCKET_TIMEOUT: &str = "sonar.scanner.socketTimeout";
 /// Seconds allowed for a whole call, body included. `0` means unlimited.
 pub const RESPONSE_TIMEOUT: &str = "sonar.scanner.responseTimeout";
@@ -73,6 +74,18 @@ const MAX_REDIRECTS: usize = 10;
 
 const JSON: &str = "application/json";
 const OCTET_STREAM: &str = "application/octet-stream";
+
+/// What a call is fetching, which decides how its response is bounded in time.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Transfer {
+    /// An API response of a few hundred bytes, for which the socket timeout can bound the whole
+    /// exchange.
+    Metadata,
+    /// An artifact, where the socket timeout bounds each read but not the transfer as a whole. Tens
+    /// of megabytes over a slow link legitimately take longer than any per-call budget, and only
+    /// `sonar.scanner.responseTimeout` puts a ceiling on the total.
+    Artifact,
+}
 
 pub type Result<T> = std::result::Result<T, HttpError>;
 
@@ -146,6 +159,7 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn new(properties: &Properties, endpoint: &Endpoint) -> Result<Self> {
+        let socket_timeout = seconds(properties, SOCKET_TIMEOUT, DEFAULT_SOCKET_TIMEOUT);
         let mut builder = Agent::config_builder()
             .user_agent(format!("cargo-sonar-scanner/{}", env!("CARGO_PKG_VERSION")))
             // Statuses are inspected here so that each one gets the message the guidelines specify.
@@ -154,9 +168,12 @@ impl HttpClient {
             .max_redirects(0)
             .max_redirects_will_error(false)
             .timeout_connect(Some(seconds(properties, CONNECT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT)))
-            // The socket timeout bounds the wait for the response head only. Applying it to the body
-            // as well would cap a large download at the time budget of a metadata call.
-            .timeout_recv_response(Some(seconds(properties, SOCKET_TIMEOUT, DEFAULT_SOCKET_TIMEOUT)))
+            // Two bounds, because `ureq` keeps the head deadline in force while the body is read: the
+            // first is the wait for the response head *and* the whole exchange, the second is a wait
+            // per read, recomputed as the body arrives. An artifact download lifts the first one, see
+            // [`Transfer`].
+            .timeout_recv_response(Some(socket_timeout))
+            .timeout_recv_body(Some(socket_timeout))
             .timeout_global(optional_seconds(properties, RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT))
             .tls_config(
                 TlsConfig::builder().provider(TlsProvider::NativeTls).root_certs(RootCerts::PlatformVerifier).build(),
@@ -195,7 +212,7 @@ impl HttpClient {
     /// No specific media type is requested — the agent's default `Accept: */*` stands — because the
     /// version endpoints answer with plain text.
     pub fn get_string(&self, url: &str) -> Result<String> {
-        let mut response = self.get(url, None)?;
+        let mut response = self.get(url, None, Transfer::Metadata)?;
         response
             .body_mut()
             .with_config()
@@ -206,7 +223,7 @@ impl HttpClient {
 
     /// GET `url` and deserialize the JSON body.
     pub fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
-        let mut response = self.get(url, Some(JSON))?;
+        let mut response = self.get(url, Some(JSON), Transfer::Metadata)?;
         let body = response
             .body_mut()
             .with_config()
@@ -221,7 +238,7 @@ impl HttpClient {
     /// Streaming matters: the JRE and the engine are large enough that buffering them whole before
     /// writing would double the peak memory for no gain.
     pub fn download(&self, url: &str, sink: &mut dyn Write) -> Result<u64> {
-        let mut response = self.get(url, Some(OCTET_STREAM))?;
+        let mut response = self.get(url, Some(OCTET_STREAM), Transfer::Artifact)?;
         let mut reader = response.body_mut().with_config().limit(MAX_DOWNLOAD_SIZE).reader();
         std::io::copy(&mut reader, sink).map_err(|source| HttpError::Download { url: url.to_string(), source })
     }
@@ -233,10 +250,10 @@ impl HttpClient {
     /// compares the host and the scheme but not the port, and the credential rule this module owes
     /// its callers is per *origin*. Following them ourselves means every hop goes through
     /// [`Self::credential_for`], one rule, one place.
-    fn get(&self, url: &str, accept: Option<&str>) -> Result<Response<Body>> {
+    fn get(&self, url: &str, accept: Option<&str>, transfer: Transfer) -> Result<Response<Body>> {
         let mut url = url.to_string();
         for _ in 0..MAX_REDIRECTS {
-            let response = self.call(&url, accept)?;
+            let response = self.call(&url, accept, transfer)?;
             if !response.status().is_redirection() {
                 return self.check(&url, response);
             }
@@ -257,8 +274,14 @@ impl HttpClient {
         Err(HttpError::TooManyRedirects { url })
     }
 
-    fn call(&self, url: &str, accept: Option<&str>) -> Result<Response<Body>> {
+    fn call(&self, url: &str, accept: Option<&str>, transfer: Transfer) -> Result<Response<Body>> {
         let mut request = self.agent.get(url);
+        if transfer == Transfer::Artifact {
+            // Left in place, the head deadline would cap the transfer as a whole at the budget of a
+            // metadata call. Dropping it leaves the per-read timeout to catch a peer that goes quiet,
+            // and the head of this one call unbounded unless 'sonar.scanner.responseTimeout' is set.
+            request = request.config().timeout_recv_response(None).build();
+        }
         if let Some(accept) = accept {
             request = request.header("Accept", accept);
         }
@@ -575,6 +598,47 @@ mod tests {
 
         assert!(error.to_string().contains("as JSON"), "{error}");
         assert_eq!(error.status(), None);
+    }
+
+    /// A peer that answers the head and then goes quiet must not hang the analysis. One second is the
+    /// smallest socket timeout the properties can express, and the server stops stalling as soon as
+    /// the client closes the connection, so the wait is that second and no more.
+    #[test]
+    fn gives_up_on_a_body_that_stops_arriving() {
+        let server = TestServer::always(TestResponse::json(r#"{"filename":"#).stalling(64));
+        let client = client_with(&server, &[(SOCKET_TIMEOUT, "1")]);
+
+        let error = client.get_json::<serde_json::Value>(&server.url("/api/v2/analysis/engine")).unwrap_err();
+
+        assert!(error.to_string().contains("Failed to read the response"), "{error}");
+    }
+
+    /// The socket timeout bounds each read of a download, not the transfer as a whole. A JRE of tens
+    /// of megabytes over a home connection takes longer than any per-call budget, and cutting it off
+    /// at the budget of a metadata call is what `Transfer::Artifact` exists to prevent. Three bytes
+    /// 500ms apart against a one-second timeout: no read waits a whole second, the transfer takes 1.5.
+    #[test]
+    fn allows_a_download_slower_than_the_socket_timeout() {
+        let server = TestServer::always(TestResponse::bytes(b"jre").paced(Duration::from_millis(500)));
+        let client = client_with(&server, &[(SOCKET_TIMEOUT, "1")]);
+
+        let mut downloaded = Vec::new();
+        client.download(&server.url("/artifacts/jre.tar.gz"), &mut downloaded).unwrap();
+
+        assert_eq!(downloaded, b"jre");
+    }
+
+    /// Lifting the head deadline for a download does not leave it unbounded: the per-read timeout
+    /// still catches a peer that promises bytes and then goes quiet.
+    #[test]
+    fn gives_up_on_a_download_that_stops_arriving() {
+        let server = TestServer::always(TestResponse::bytes(b"jre").stalling(64));
+        let client = client_with(&server, &[(SOCKET_TIMEOUT, "1")]);
+
+        let mut downloaded = Vec::new();
+        let error = client.download(&server.url("/artifacts/jre.tar.gz"), &mut downloaded).unwrap_err();
+
+        assert!(error.to_string().contains("Failed to download"), "{error}");
     }
 
     #[test]
