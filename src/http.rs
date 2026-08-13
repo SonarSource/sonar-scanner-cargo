@@ -37,6 +37,7 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 use ureq::{Agent, Body, Proxy, ProxyProtocol, http::Response};
+use url::Url;
 
 use crate::config::{Properties, TOKEN};
 use crate::endpoint::Endpoint;
@@ -139,7 +140,7 @@ pub struct HttpClient {
     trusted_origins: Vec<String>,
     /// How to name the endpoint in an authentication failure, e.g. `SonarQube Cloud [us]`.
     product: String,
-    /// Where a user goes to fix a rejected token.
+    /// Where a user goes to fix a rejected token. Carries no trailing slash: [`Endpoint`] strips it.
     host_url: String,
 }
 
@@ -281,8 +282,7 @@ impl HttpClient {
             200..=299 => Ok(response),
             401 => Err(HttpError::Unauthorized(format!(
                 "Unable to authenticate on {}. Please check your token or generate a new one at {}/account/security",
-                self.product,
-                self.host_url.trim_end_matches('/')
+                self.product, self.host_url
             ))),
             403 if self.product.starts_with("SonarQube Cloud") => Err(HttpError::Forbidden(format!(
                 "You don't have permission to execute an analysis in any organization on {}.",
@@ -305,64 +305,21 @@ impl HttpClient {
 /// Turn a `Location` header into an absolute URL. Servers are entitled to send a relative one, and
 /// the artifact endpoints of a reverse-proxied SonarQube Server do.
 fn resolve_location(base: &str, location: &str) -> Option<String> {
+    // An empty reference resolves to the base URL itself, which as a redirect target is a loop.
     if location.is_empty() {
         return None;
     }
-    if location.contains("://") {
-        return Some(location.to_string());
-    }
-    let (scheme, rest) = base.split_once("://")?;
-    if let Some(authority_and_path) = location.strip_prefix("//") {
-        return Some(format!("{scheme}://{authority_and_path}"));
-    }
-    let (authority, base_path) = rest.split_once('/').map_or((rest, ""), |(authority, path)| (authority, path));
-    let path = if location.starts_with('/') {
-        location.to_string()
-    } else {
-        // Relative to the directory of the current path, with the query string of the base dropped.
-        let base_path = base_path.split(['?', '#']).next().unwrap_or_default();
-        let directory = base_path.rsplit_once('/').map_or("", |(head, _)| head);
-        format!("/{directory}{}{location}", if directory.is_empty() { "" } else { "/" })
-    };
-    Some(format!("{scheme}://{authority}{}", normalise_path(&path)))
+    Url::parse(base).ok()?.join(location).ok().map(String::from)
 }
 
-/// Resolve `.` and `..` segments, per RFC 3986 §5.2.4. Without this, a relative `Location` would be
-/// sent back to the server verbatim and answered with a 404.
-fn normalise_path(path: &str) -> String {
-    let mut segments: Vec<&str> = Vec::new();
-    for segment in path.split('/') {
-        match segment {
-            "." => {}
-            // Index 0 is the empty segment before the leading slash, and is never popped: `..` past
-            // the root resolves to the root.
-            ".." => {
-                if segments.len() > 1 {
-                    segments.pop();
-                }
-            }
-            segment => segments.push(segment),
-        }
-    }
-    segments.join("/")
-}
-
-/// The scheme-and-authority of `url`, lowercased, with any default port and userinfo removed so
-/// that `https://sq.example.com` and `https://SQ.example.com:443/` compare equal.
+/// The origin of `url` — scheme, host and non-default port — as the standard serializes it, so that
+/// `https://sq.example.com` and `https://SQ.example.com:443/` compare equal.
+///
+/// A scheme with no host has no origin to compare, and `None` denies it the token rather than letting
+/// it match anything.
 fn origin(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    let scheme = scheme.to_ascii_lowercase();
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let authority = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
-    let authority = match scheme.as_str() {
-        "http" => authority.strip_suffix(":80").unwrap_or(authority),
-        "https" => authority.strip_suffix(":443").unwrap_or(authority),
-        _ => authority,
-    };
-    if authority.is_empty() {
-        return None;
-    }
-    Some(format!("{scheme}://{}", authority.to_ascii_lowercase()))
+    let origin = Url::parse(url).ok()?.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
 }
 
 fn seconds(properties: &Properties, key: &str, default: u64) -> Duration {
@@ -560,6 +517,8 @@ mod tests {
         assert_eq!(error.status(), Some(302));
     }
 
+    /// Resolution is the `url` crate's; what this pins down is the set of `Location` shapes the
+    /// artifact endpoints actually send, and that none of them is mistaken for another.
     #[test]
     fn resolves_a_location_header() {
         let base = "https://sq.example.com/api/v2/analysis/jres/1?os=linux";
@@ -582,6 +541,12 @@ mod tests {
             "dot segments are resolved, and cannot climb above the root"
         );
         assert_eq!(resolve_location(base, "./2").as_deref(), Some("https://sq.example.com/api/v2/analysis/jres/2"));
+        assert_eq!(
+            resolve_location(base, "http://sq.example.com:8443/jre").as_deref(),
+            Some("http://sq.example.com:8443/jre"),
+            "another port is a different URL, and below a different origin"
+        );
+        assert_eq!(resolve_location("not a url", "/artifacts/jre"), None, "nothing resolves against nothing");
     }
 
     #[test]
@@ -702,16 +667,15 @@ mod tests {
         assert_eq!(error.status(), None);
     }
 
-    /// A trailing slash on `sonar.host.url` must not double up in the message.
+    /// A trailing slash on `sonar.host.url` must not double up in the message. The client leans on the
+    /// endpoint having stripped it, so the property goes through the resolver here instead of being
+    /// written into an `Endpoint` by hand.
     #[test]
     fn does_not_double_the_slash_in_the_token_url() {
-        let endpoint = Endpoint {
-            host_url: "https://sq.example.com/".to_string(),
-            api_base_url: "https://sq.example.com/api/v2".to_string(),
-            is_cloud: false,
-            region: String::new(),
-        };
-        let client = HttpClient::new(&Properties::new(), &endpoint).unwrap();
+        let properties: Properties =
+            [(crate::config::HOST_URL.to_string(), "https://sq.example.com/".to_string())].into_iter().collect();
+        let endpoint = crate::endpoint::resolve(&properties).unwrap();
+        let client = HttpClient::new(&properties, &endpoint).unwrap();
 
         assert!(
             unauthorized(&client).ends_with("https://sq.example.com/account/security"),
@@ -747,7 +711,11 @@ mod tests {
         assert_eq!(origin("https://sq.example.com:8443/").as_deref(), Some("https://sq.example.com:8443"));
         assert_eq!(origin("https://user:pass@sq.example.com/x").as_deref(), Some("https://sq.example.com"));
         assert_eq!(origin("not a url"), None);
-        assert_eq!(origin("https:///no-host"), None);
+        assert_eq!(origin("https://"), None, "no host, so nothing to compare");
+        // The standard skips the extra slash for a scheme that has an authority, so this is a host.
+        assert_eq!(origin("https:///sq.example.com").as_deref(), Some("https://sq.example.com"));
+        // A scheme that carries no host has an opaque origin, which must not match a trusted one.
+        assert_eq!(origin("mailto:someone@sq.example.com"), None);
     }
 
     #[test]
