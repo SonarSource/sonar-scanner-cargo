@@ -85,7 +85,7 @@ pub fn resolve(
 }
 
 fn provision(client: &HttpClient, endpoint: &Endpoint, cache: &Cache) -> crate::error::Result<Engine> {
-    let url = format!("{}{ENGINE_ENDPOINT}", endpoint.api_base_url.trim_end_matches('/'));
+    let url = format!("{}{ENGINE_ENDPOINT}", endpoint.api_base_url);
 
     crate::cache::retrying_a_checksum_mismatch(|| {
         let metadata: Metadata = client.get_json(&url)?;
