@@ -151,7 +151,7 @@ fn provision(
     platform: &Platform,
     cache: &Cache,
 ) -> crate::error::Result<Option<Jre>> {
-    let api_base_url = endpoint.api_base_url.trim_end_matches('/');
+    let api_base_url = endpoint.api_base_url.as_str();
     let url = format!("{api_base_url}{JRES_ENDPOINT}?os={}&arch={}", encoded(&platform.os), encoded(&platform.arch));
 
     // Two attempts at most. A checksum mismatch is re-read from the metadata rather than retried
@@ -189,7 +189,12 @@ fn install(client: &HttpClient, api_base_url: &str, cache: &Cache, metadata: &Me
 
     // A `downloadUrl` usually points at a CDN, which is a foreign origin and therefore gets no token:
     // that rule lives in the HTTP client, so both branches are the same call here.
-    let url = metadata.download_url.clone().unwrap_or_else(|| format!("{api_base_url}{JRES_ENDPOINT}/{}", metadata.id));
+    // The id comes from the server's JSON and lands in a path segment, so it is encoded rather than
+    // pasted: a `/` or a `?` in it would otherwise decide which URL is called.
+    let url = metadata
+        .download_url
+        .clone()
+        .unwrap_or_else(|| format!("{api_base_url}{JRES_ENDPOINT}/{}", encoded(&metadata.id)));
 
     let archive = entry.file(|sink| {
         info!("Downloading the JRE {} from {url}", metadata.filename);
@@ -253,8 +258,9 @@ fn variable<'a>(env: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str
     }
 }
 
-/// Percent-encode a query parameter value. `sonar.scanner.os` and `sonar.scanner.arch` are ordinary
-/// tokens in practice, but they come from configuration and end up in a URL.
+/// Percent-encode a single query parameter value or path segment: everything outside the unreserved
+/// set goes, which is safe in both positions. The os, the arch and the JRE id are ordinary tokens in
+/// practice, but two come from configuration and one from the server, and all three end up in a URL.
 fn encoded(value: &str) -> String {
     value
         .bytes()
@@ -378,6 +384,33 @@ mod tests {
         assert_eq!(requests[0].header("authorization"), Some("Bearer s3cr3t"));
         assert_eq!(requests[1].path, "/api/v2/analysis/jres/jre-1", "the API serves the archive when there is no CDN");
         assert_eq!(requests[1].header("accept"), Some("application/octet-stream"));
+    }
+
+    /// The id is a path segment whose value the server owns. One carrying a `/` or a `?` must not be
+    /// able to send the download somewhere else.
+    #[test]
+    fn encodes_the_jre_id_in_the_download_url() {
+        let dir = tempdir();
+        let home = tempdir();
+        let (archive, checksum) = jre_archive(&dir);
+        let metadata = format!(
+            r#"[{{"id":"jre/1?os=win","filename":"jre.tar.gz","sha256":"{checksum}","javaPath":"jre/bin/java",
+                 "os":"linux","arch":"x86_64"}}]"#
+        );
+        let expected = "/api/v2/analysis/jres/jre%2F1%3Fos%3Dwin";
+        let server = TestServer::start(move |request| {
+            if request.path.starts_with("/api/v2/analysis/jres?") {
+                Response::json(&metadata)
+            } else if request.path == expected {
+                Response::bytes(&archive)
+            } else {
+                Response::status(404).with_body(request.path.as_bytes())
+            }
+        });
+
+        resolve_against(&server, &home, &[], &[]).unwrap();
+
+        assert_eq!(server.requests()[1].path, expected);
     }
 
     #[test]
