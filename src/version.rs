@@ -48,9 +48,9 @@ const QUOTED_BODY_LENGTH: usize = 60;
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum VersionError {
     #[error(
-        "SonarQube Server {version} is not supported. This scanner requires {MINIMUM_SERVER_VERSION} or later, \
-         because it provisions the analysis engine over the API. To analyse with an older server, use the \
-         SonarScanner CLI: https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
+        "SonarQube Server {version} is not supported. This scanner requires {MINIMUM_SERVER_VERSION} or later. \
+         To analyse with an older server, use the SonarScanner CLI: \
+         https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
     )]
     UnsupportedServer { version: String },
 
@@ -87,12 +87,12 @@ pub fn resolve(
     if !is_at_least(&version, MINIMUM_SERVER_VERSION) {
         return Err(VersionError::UnsupportedServer { version }.into());
     }
-    info!("Communicating with {} {version}", product_of(&version));
+    info!("Communicating with {} {version}", endpoint.product());
     Ok(Some(version))
 }
 
 fn query(client: &HttpClient, endpoint: &Endpoint) -> crate::error::Result<String> {
-    let url = format!("{}{VERSION_ENDPOINT}", endpoint.api_base_url.trim_end_matches('/'));
+    let url = format!("{}{VERSION_ENDPOINT}", endpoint.api_base_url);
     let failure = match client.get_string(&url) {
         // An answer that is not a version means whatever replied is not this endpoint, so the
         // fallback below has nothing to add: it would only ask the same wrong thing again.
@@ -106,7 +106,7 @@ fn query(client: &HttpClient, endpoint: &Endpoint) -> crate::error::Result<Strin
     // meaningful. The legacy endpoint is called only to tell "too old to support" apart from
     // "misconfigured or unauthenticated", and its answer is not trusted for anything else.
     debug!("{failure}. Falling back to {LEGACY_VERSION_ENDPOINT} to find out whether the server is simply too old");
-    let legacy_url = format!("{}{LEGACY_VERSION_ENDPOINT}", endpoint.host_url.trim_end_matches('/'));
+    let legacy_url = format!("{}{LEGACY_VERSION_ENDPOINT}", endpoint.host_url);
     match client.get_string(&legacy_url).map(|body| version_in(&body)) {
         Ok(Some(version)) if !is_at_least(&version, MINIMUM_SERVER_VERSION) => Ok(version),
         // A server new enough to serve the modern endpoint failed to, or the answer here is not a
@@ -139,15 +139,6 @@ fn quoted(body: &str) -> String {
     }
 }
 
-/// How to name a server of this version, mirroring the Java library: SonarQube Server numbers its
-/// releases by year, the Community Build by the sequence in between.
-fn product_of(version: &str) -> &'static str {
-    match major(version) {
-        Some(major) if (11..2025).contains(&major) => "SonarQube Community Build",
-        _ => "SonarQube Server",
-    }
-}
-
 /// Whether `version` is at least `target`, ignoring any `-qualifier` suffix.
 ///
 /// Both are dotted numbers, of any length: a server reports `10.6`, `2025.1.0.112345` or
@@ -164,11 +155,6 @@ fn is_at_least(version: &str, target: &str) -> bool {
 
 fn components(version: &str) -> Vec<u64> {
     version.split('.').map(|component| component.parse().unwrap_or_default()).collect()
-}
-
-fn major(version: &str) -> Option<u64> {
-    let version = version.trim();
-    version.split(['.', '-']).next()?.parse().ok()
 }
 
 #[cfg(test)]
@@ -257,9 +243,9 @@ mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "SonarQube Server 9.9.4.87374 is not supported. This scanner requires 10.6 or later, because it \
-                 provisions the analysis engine over the API. To analyse with an older server, use the SonarScanner \
-                 CLI: https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
+                "SonarQube Server 9.9.4.87374 is not supported. This scanner requires 10.6 or later. To analyse \
+                 with an older server, use the SonarScanner CLI: \
+                 https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
             )
         );
     }
@@ -353,13 +339,5 @@ mod tests {
         // Anything not starting with a digit is not a version we can reason about.
         assert!(!is_at_least("", "10.6"));
         assert!(!is_at_least("<html>error</html>", "10.6"));
-    }
-
-    #[test]
-    fn names_the_product_from_the_version() {
-        assert_eq!(product_of("2025.1.0.112345"), "SonarQube Server");
-        assert_eq!(product_of("10.6"), "SonarQube Server");
-        assert_eq!(product_of("25.5.0.107428"), "SonarQube Community Build");
-        assert_eq!(product_of("nonsense"), "SonarQube Server");
     }
 }
