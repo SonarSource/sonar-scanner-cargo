@@ -28,6 +28,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 /// A request as the server received it.
 #[derive(Debug, Clone)]
@@ -50,11 +51,15 @@ pub struct Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// Bytes promised by `Content-Length` and never sent, see [`Response::stalling`].
+    pub unsent: usize,
+    /// Pause between two bytes of the body, see [`Response::paced`].
+    pub pace: Option<Duration>,
 }
 
 impl Response {
     pub fn status(status: u16) -> Self {
-        Response { status, headers: Vec::new(), body: Vec::new() }
+        Response { status, headers: Vec::new(), body: Vec::new(), unsent: 0, pace: None }
     }
 
     pub fn json(body: &str) -> Self {
@@ -81,6 +86,19 @@ impl Response {
 
     pub fn with_body(mut self, body: &[u8]) -> Self {
         self.body = body.to_vec();
+        self
+    }
+
+    /// Promise `unsent` more bytes than the body carries and then wait, which is what a peer that
+    /// goes quiet part-way through a response looks like to a client.
+    pub fn stalling(mut self, unsent: usize) -> Self {
+        self.unsent = unsent;
+        self
+    }
+
+    /// Send the body one byte at a time, `gap` apart, as a slow link does.
+    pub fn paced(mut self, gap: Duration) -> Self {
+        self.pace = Some(gap);
         self
     }
 }
@@ -202,11 +220,27 @@ fn write_response(connection: &mut TcpStream, response: &Response) -> std::io::R
     }
     // One request per connection: closing is simpler than honouring keep-alive, and the client
     // pools connections either way.
-    head.push_str(&format!("Content-Length: {}\r\nConnection: close\r\n\r\n", response.body.len()));
+    head.push_str(&format!("Content-Length: {}\r\nConnection: close\r\n\r\n", response.body.len() + response.unsent));
 
     connection.write_all(head.as_bytes())?;
-    connection.write_all(&response.body)?;
-    connection.flush()
+    match response.pace {
+        None => connection.write_all(&response.body)?,
+        Some(gap) => {
+            for byte in &response.body {
+                std::thread::sleep(gap);
+                connection.write_all(&[*byte])?;
+                connection.flush()?;
+            }
+        }
+    }
+    connection.flush()?;
+
+    if response.unsent > 0 {
+        // The promised bytes never come. Waiting for the client to give up and close its end keeps
+        // the stall no longer than the test needs it, without a sleep to guess at.
+        let _ = connection.read(&mut [0u8; 1]);
+    }
+    Ok(())
 }
 
 fn reason(status: u16) -> &'static str {
