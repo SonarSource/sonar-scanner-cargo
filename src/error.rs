@@ -42,6 +42,9 @@ pub enum ScannerError {
     InvalidManifestConfig { path: PathBuf, message: String },
 
     #[error("{0}")]
+    Cache(#[from] crate::cache::CacheError),
+
+    #[error("{0}")]
     Endpoint(#[from] crate::endpoint::EndpointError),
 
     #[error("{0}")]
