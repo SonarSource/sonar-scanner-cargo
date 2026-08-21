@@ -95,20 +95,29 @@ fn untar(archive: &Path, into: &Path) -> io::Result<()> {
     tar.set_overwrite(true);
 
     let mut symlinks = HashSet::new();
+    let mut directories = Vec::new();
 
     for entry in tar.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
-        let parent = path.parent().unwrap_or(Path::new("")).to_path_buf();
+        let is_directory = entry.header().entry_type().is_dir();
+        let directory = if is_directory { path.as_path() } else { path.parent().unwrap_or(Path::new("")) };
 
         // Directories are created here rather than left to `unpack_in`, so that an entry whose path
         // runs through a symlink is stopped before anything is written through it.
-        if !prepare_directory(into, &parent)? {
+        if !prepare_directory(into, directory)? {
             warn!(
                 "Skipping {} from {}: it would be extracted outside the target directory",
                 path.display(),
                 archive.display()
             );
+            continue;
+        }
+
+        // The directory now exists, and its mode waits until the whole archive is out. `unpack_in`
+        // would apply it here, and a JRE records `conf` as read-only before the files inside it.
+        if is_directory {
+            directories.push((into.join(&path), entry.header().mode()?));
             continue;
         }
 
@@ -133,7 +142,7 @@ fn untar(archive: &Path, into: &Path) -> io::Result<()> {
             );
         }
     }
-    Ok(())
+    apply_directory_modes(directories)
 }
 
 fn unzip(archive: &Path, into: &Path) -> Result<(), ArchiveError> {
@@ -168,8 +177,6 @@ fn unzip(archive: &Path, into: &Path) -> Result<(), ArchiveError> {
             continue;
         }
         if entry.is_dir() {
-            // The mode is applied once the whole archive is out. Applying it now would make a
-            // directory the archive records as read-only refuse its own contents.
             if let Some(mode) = entry.unix_mode() {
                 directories.push((target, mode));
             }
@@ -187,10 +194,18 @@ fn unzip(archive: &Path, into: &Path) -> Result<(), ArchiveError> {
         set_mode(&target, entry.unix_mode()).map_err(extract)?;
     }
 
-    // Deepest first, so that a directory left unreadable does not hide the ones below it.
+    apply_directory_modes(directories).map_err(extract)
+}
+
+/// Apply the modes the archive recorded on its directories, once everything is extracted.
+///
+/// Doing it as the directories are created does not work: a JRE records `conf` as read-only, and a
+/// read-only directory refuses `conf/net.properties`. Deepest first, so that a directory left
+/// unreadable does not hide the ones below it.
+fn apply_directory_modes(mut directories: Vec<(PathBuf, u32)>) -> io::Result<()> {
     directories.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
     for (path, mode) in directories {
-        set_mode(&path, Some(mode)).map_err(extract)?;
+        set_mode(&path, Some(mode))?;
     }
     Ok(())
 }
@@ -479,6 +494,40 @@ mod tests {
 
         assert!(!into.join("evil").exists(), "the entry is not written through the link");
         assert!(!dir.path().join("evil").exists(), "nor anywhere else");
+    }
+
+    /// The tar counterpart of `keeps_the_mode_of_a_zip_directory`, and the format this actually
+    /// matters for: a JRE `.tar.gz` records `conf` as read-only before the files inside it.
+    #[cfg(unix)]
+    #[test]
+    fn keeps_the_mode_of_a_tar_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir();
+        let path = dir.path().join("jre.tar.gz");
+        let gzip = flate2::write::GzEncoder::new(File::create(&path).unwrap(), flate2::Compression::fast());
+        let mut builder = tar::Builder::new(gzip);
+        let mut conf = tar::Header::new_gnu();
+        conf.set_entry_type(tar::EntryType::Directory);
+        conf.set_size(0);
+        conf.set_mode(0o555);
+        builder.append_data(&mut conf, "conf", io::empty()).unwrap();
+        let mut properties = tar::Header::new_gnu();
+        properties.set_size(31);
+        properties.set_mode(0o644);
+        builder.append_data(&mut properties, "conf/net.properties", &b"java.net.useSystemProxies=true\n"[..]).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+        let into = dir.path().join("into");
+        std::fs::create_dir(&into).unwrap();
+
+        extract(&path, &into).unwrap();
+
+        let conf = into.join("conf");
+        assert!(conf.join("net.properties").is_file(), "a read-only directory still receives its contents");
+        assert_eq!(std::fs::metadata(&conf).unwrap().permissions().mode() & 0o777, 0o555);
+
+        // Leave it removable, so the temporary directory can clean itself up.
+        std::fs::set_permissions(&conf, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]
