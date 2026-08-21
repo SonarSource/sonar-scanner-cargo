@@ -23,13 +23,29 @@
 //!
 //! - **Permissions survive on unix.** A JRE whose `bin/java` is not executable is useless, and a
 //!   `.tar.gz` is exactly the format that carries the bit.
-//! - **No entry escapes the target directory, and no symlink points out of it.** The archive is
-//!   checksum-verified against what an authenticated server reported, so this is defence in depth
-//!   rather than the first line of it: an entry that points outside is skipped with a warning, not
-//!   extracted and not fatal.
+//! - **Nothing is written outside the target directory.** The archive is checksum-verified against
+//!   what an authenticated server reported, so this is defence in depth rather than the first line
+//!   of it: an entry that would land outside is skipped with a warning, not extracted and not fatal.
+//!
+//! The second one is worth stating precisely, because comparing paths textually is not enough to
+//! get it. Once a symlink exists, the depth the kernel resolves a path to is no longer the depth
+//! its components suggest: with `a/b` a symlink to `..`, the path `a/b/../..` reads as two levels
+//! down and one back up, but actually resolves a level *above* the directory it started in. Three
+//! rules together give the property, and each is load-bearing:
+//!
+//! 1. Every directory an entry needs is created here, one component at a time, and a component that
+//!    already exists as a symlink stops the entry. Nothing is ever written *through* a link.
+//! 2. A symlink is only created when its target stays inside the directory by component count, and
+//!    does not pass through a symlink this extraction has already created — the case that cannot be
+//!    judged textually is refused rather than guessed at.
+//! 3. The paths of entries themselves are relative and may not climb out, which both archive
+//!    readers check for us.
+//!
+//! Rule 1 is what actually makes the guarantee, and it holds regardless of the other two.
 
+use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 
 use log::{debug, warn};
@@ -78,23 +94,33 @@ fn untar(archive: &Path, into: &Path) -> io::Result<()> {
     tar.set_preserve_permissions(true);
     tar.set_overwrite(true);
 
+    let mut symlinks = HashSet::new();
+
     for entry in tar.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
+        let parent = path.parent().unwrap_or(Path::new("")).to_path_buf();
 
-        // `unpack_in` validates the path of every entry, and the target of a hard link, but a symlink
-        // is created with the target the archive gave verbatim. Nothing is written through it — that
-        // is what the path validation prevents — but the link would still be left in the cache
-        // pointing out of it, so it gets the check the zip path applies.
-        if entry.header().entry_type().is_symlink()
-            && let Some(link) = entry.link_name()?
-            && !is_inside(&path.parent().unwrap_or(Path::new("")).join(&link))
-        {
+        // Directories are created here rather than left to `unpack_in`, so that an entry whose path
+        // runs through a symlink is stopped before anything is written through it.
+        if !prepare_directory(into, &parent)? {
             warn!(
-                "Skipping the symlink {} from {}: it points outside the target directory",
+                "Skipping {} from {}: it would be extracted outside the target directory",
                 path.display(),
                 archive.display()
             );
+            continue;
+        }
+
+        // A symlink is recreated here rather than by `unpack_in`, for two reasons. It does not
+        // validate the target, which it writes verbatim; and on Windows it calls `symlink_file`
+        // unconditionally, which fails with error 1314 unless the account holds the privilege or
+        // the machine is in developer mode — so a `.tar.gz` there would fail on the first link
+        // rather than skipping it the way the zip path does.
+        if entry.header().entry_type().is_symlink() {
+            if let Some(link) = entry.link_name()? {
+                restore_symlink(&path, &link, into, archive, &mut symlinks)?;
+            }
             continue;
         }
 
@@ -116,6 +142,8 @@ fn unzip(archive: &Path, into: &Path) -> Result<(), ArchiveError> {
 
     let file = BufReader::new(File::open(archive).map_err(extract)?);
     let mut zip = zip::ZipArchive::new(file).map_err(read)?;
+    let mut symlinks = HashSet::new();
+    let mut directories = Vec::new();
 
     for index in 0..zip.len() {
         let mut entry = zip.by_index(index).map_err(read)?;
@@ -129,16 +157,28 @@ fn unzip(archive: &Path, into: &Path) -> Result<(), ArchiveError> {
             continue;
         };
         let target = into.join(&relative);
+        let directory = if entry.is_dir() { relative.as_path() } else { relative.parent().unwrap_or(Path::new("")) };
 
-        if entry.is_dir() {
-            std::fs::create_dir_all(&target).map_err(extract)?;
+        if !prepare_directory(into, directory).map_err(extract)? {
+            warn!(
+                "Skipping {} from {}: it would be extracted outside the target directory",
+                relative.display(),
+                archive.display()
+            );
             continue;
         }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(extract)?;
+        if entry.is_dir() {
+            // The mode is applied once the whole archive is out. Applying it now would make a
+            // directory the archive records as read-only refuse its own contents.
+            if let Some(mode) = entry.unix_mode() {
+                directories.push((target, mode));
+            }
+            continue;
         }
         if entry.is_symlink() {
-            symlink(&mut entry, &relative, &target, archive).map_err(extract)?;
+            let mut destination = String::new();
+            entry.read_to_string(&mut destination).map_err(extract)?;
+            restore_symlink(&relative, Path::new(&destination), into, archive, &mut symlinks).map_err(extract)?;
             continue;
         }
 
@@ -146,58 +186,106 @@ fn unzip(archive: &Path, into: &Path) -> Result<(), ArchiveError> {
         io::copy(&mut entry, &mut file).map_err(extract)?;
         set_mode(&target, entry.unix_mode()).map_err(extract)?;
     }
+
+    // Deepest first, so that a directory left unreadable does not hide the ones below it.
+    directories.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+    for (path, mode) in directories {
+        set_mode(&path, Some(mode)).map_err(extract)?;
+    }
     Ok(())
 }
 
-/// Recreate a symlink stored in a zip, whose body is the link target.
+/// Create every directory of `relative` under `into` that does not exist yet.
 ///
-/// A JRE archive for Windows does not contain any, and Windows cannot create one without a
-/// privilege, so this exists for the case of an unusual archive on unix rather than as a hot path.
-fn symlink(entry: &mut impl io::Read, relative: &Path, target: &Path, archive: &Path) -> io::Result<()> {
-    let mut destination = String::new();
-    entry.read_to_string(&mut destination)?;
+/// Returns `false`, having created nothing further, when a component is already present as a
+/// symlink or when `relative` is not a plain relative path. Both mean the entry has to be skipped:
+/// writing through a link is how an archive escapes a directory that every textual check on it
+/// says it stays inside.
+fn prepare_directory(into: &Path, relative: &Path) -> io::Result<bool> {
+    let mut current = into.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => current.push(part),
+            Component::CurDir => continue,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return Ok(false),
+        }
+        match current.symlink_metadata() {
+            Ok(metadata) if metadata.is_symlink() => return Ok(false),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => std::fs::create_dir(&current)?,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(true)
+}
 
-    // The link is resolved against its own directory, so that is where the check has to start:
-    // `bin/java -> ../lib/java` stays inside, `bin/x -> ../../etc/passwd` does not.
-    let resolved = relative.parent().unwrap_or(Path::new("")).join(&destination);
-    if !is_inside(&resolved) {
+/// Recreate a symlink read from an archive, if its target can be shown to stay inside `into`.
+///
+/// `created` accumulates the links made so far, by path relative to `into`, and grows as they are.
+fn restore_symlink(
+    relative: &Path,
+    destination: &Path,
+    into: &Path,
+    archive: &Path,
+    created: &mut HashSet<PathBuf>,
+) -> io::Result<()> {
+    let parent = relative.parent().unwrap_or(Path::new(""));
+    if !link_stays_inside(parent, destination, created) {
         warn!(
             "Skipping the symlink {} from {}: it points outside the target directory",
-            target.display(),
+            relative.display(),
             archive.display()
         );
         return Ok(());
     }
-    create_symlink(&destination, target)
+    if create_symlink(destination, &into.join(relative))? {
+        created.insert(relative.to_path_buf());
+    }
+    Ok(())
 }
 
-/// Whether a relative path stays within the directory it is resolved against.
-fn is_inside(path: &Path) -> bool {
-    let mut depth: i32 = 0;
-    for component in path.components() {
+/// Whether `link`, resolved against the directory `from` that holds it, stays inside the extraction
+/// root — `bin/java -> ../lib/java` does, `bin/x -> ../../etc/passwd` does not.
+///
+/// A target that runs through one of the symlinks in `created` is reported as outside. It may well
+/// not be, but where it lands depends on what that link points at, and walking the path textually
+/// is exactly the reasoning that does not survive a symlink. Refusing is the safe answer, and the
+/// case does not arise in a JRE.
+fn link_stays_inside(from: &Path, link: &Path, created: &HashSet<PathBuf>) -> bool {
+    let mut resolved = PathBuf::new();
+    for component in from.join(link).components() {
         match component {
-            Component::Normal(_) => depth += 1,
+            Component::Normal(part) => {
+                resolved.push(part);
+                if created.contains(&resolved) {
+                    return false;
+                }
+            }
             Component::CurDir => {}
-            Component::ParentDir => depth -= 1,
+            // `pop` is false only with nothing left to pop, which is the step out of the directory.
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    return false;
+                }
+            }
             // Anything rooted or prefixed leaves the directory by definition.
             Component::RootDir | Component::Prefix(_) => return false,
-        }
-        if depth < 0 {
-            return false;
         }
     }
     true
 }
 
+/// Whether the link was created, so the caller only records the ones that exist.
 #[cfg(unix)]
-fn create_symlink(destination: &str, at: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(destination, at)
+fn create_symlink(destination: &Path, at: &Path) -> io::Result<bool> {
+    std::os::unix::fs::symlink(destination, at)?;
+    Ok(true)
 }
 
 #[cfg(not(unix))]
-fn create_symlink(destination: &str, at: &Path) -> io::Result<()> {
-    warn!("Not creating the symlink {} to {destination}: symlinks are not supported here", at.display());
-    Ok(())
+fn create_symlink(destination: &Path, at: &Path) -> io::Result<bool> {
+    warn!("Not creating the symlink {} to {}: symlinks are not supported here", at.display(), destination.display());
+    Ok(false)
 }
 
 /// Apply the mode a zip entry recorded. Windows has nothing to apply it to.
@@ -295,7 +383,8 @@ mod tests {
         assert_eq!(mode("release"), 0o644);
     }
 
-    /// A `.tar.gz` of the given symlinks, as `(path, target)`.
+    /// A `.tar.gz` of the given symlinks, as `(path, target)`. Only the unix tests build one.
+    #[cfg(unix)]
     fn tar_gz_of_symlinks(dir: &Path, name: &str, links: &[(&str, &str)]) -> PathBuf {
         let path = dir.join(name);
         let gzip = flate2::write::GzEncoder::new(File::create(&path).unwrap(), flate2::Compression::fast());
@@ -348,6 +437,50 @@ mod tests {
         assert!(into.join("bin/absolute").symlink_metadata().is_err(), "nor is an absolute one");
     }
 
+    /// Counting components says `up/out/..` is one level down from the root. It is not: `up/out`
+    /// is a link to the root, so the kernel resolves it a level above.
+    #[cfg(unix)]
+    #[test]
+    fn skips_a_tar_symlink_that_escapes_through_another_symlink() {
+        let dir = tempdir();
+        let archive = tar_gz_of_symlinks(dir.path(), "jre.tar.gz", &[("up/out", ".."), ("escape", "up/out/..")]);
+        let into = dir.path().join("into");
+        std::fs::create_dir(&into).unwrap();
+
+        extract(&archive, &into).unwrap();
+
+        assert_eq!(std::fs::read_link(into.join("up/out")).unwrap(), Path::new(".."), "the first link is inside");
+        assert!(into.join("escape").symlink_metadata().is_err(), "the one resolving through it is not created");
+    }
+
+    /// The guarantee that does not depend on judging a link's target: whatever a link points at,
+    /// no entry is written through it.
+    #[cfg(unix)]
+    #[test]
+    fn skips_a_tar_entry_whose_path_runs_through_a_symlink() {
+        let dir = tempdir();
+        let path = dir.path().join("jre.tar.gz");
+        let gzip = flate2::write::GzEncoder::new(File::create(&path).unwrap(), flate2::Compression::fast());
+        let mut builder = tar::Builder::new(gzip);
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Symlink);
+        link.set_size(0);
+        link.set_mode(0o777);
+        builder.append_link(&mut link, "up/out", "..").unwrap();
+        let mut file = tar::Header::new_gnu();
+        file.set_size(4);
+        file.set_mode(0o644);
+        builder.append_data(&mut file, "up/out/evil", &b"evil"[..]).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+        let into = dir.path().join("into");
+        std::fs::create_dir(&into).unwrap();
+
+        extract(&path, &into).unwrap();
+
+        assert!(!into.join("evil").exists(), "the entry is not written through the link");
+        assert!(!dir.path().join("evil").exists(), "nor anywhere else");
+    }
+
     #[test]
     fn skips_a_tar_entry_that_escapes_the_target() {
         let dir = tempdir();
@@ -390,6 +523,35 @@ mod tests {
 
         let mode = std::fs::metadata(into.join("bin/java")).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755);
+    }
+
+    /// A JRE records modes on its directories too, and `conf` arriving world-writable because the
+    /// umask decided it is not what the archive said.
+    #[cfg(unix)]
+    #[test]
+    fn keeps_the_mode_of_a_zip_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir();
+        let path = dir.path().join("jre.zip");
+        let mut writer = zip::ZipWriter::new(File::create(&path).unwrap());
+        writer.add_directory("conf", SimpleFileOptions::default().unix_permissions(0o555)).unwrap();
+        writer.start_file("conf/net.properties", SimpleFileOptions::default().unix_permissions(0o644)).unwrap();
+        writer.write_all(b"java.net.useSystemProxies=true\n").unwrap();
+        writer.finish().unwrap();
+        let into = dir.path().join("into");
+        std::fs::create_dir(&into).unwrap();
+
+        extract(&path, &into).unwrap();
+
+        // The file first: a directory made read-only before its contents are written would stop
+        // them being written at all, which is the reason the modes are applied at the end.
+        let conf = into.join("conf");
+        assert!(conf.join("net.properties").is_file(), "a read-only directory still receives its contents");
+        assert_eq!(std::fs::metadata(&conf).unwrap().permissions().mode() & 0o777, 0o555);
+
+        // Leave it removable, so the temporary directory can clean itself up.
+        std::fs::set_permissions(&conf, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]
@@ -446,12 +608,29 @@ mod tests {
     }
 
     #[test]
-    fn recognises_a_path_that_stays_inside() {
-        assert!(is_inside(Path::new("lib/java")));
-        assert!(is_inside(Path::new("./lib/java")));
-        assert!(is_inside(Path::new("lib/../bin/java")));
-        assert!(!is_inside(Path::new("../lib/java")));
-        assert!(!is_inside(Path::new("lib/../../java")));
-        assert!(!is_inside(Path::new("/etc/passwd")));
+    fn recognises_a_link_that_stays_inside() {
+        let none = HashSet::new();
+        let inside = |from: &str, link: &str| link_stays_inside(Path::new(from), Path::new(link), &none);
+
+        assert!(inside("", "lib/java"));
+        assert!(inside("", "./lib/java"));
+        assert!(inside("", "lib/../bin/java"));
+        assert!(inside("bin", "../lib/java"), "a link is resolved against the directory holding it");
+        assert!(!inside("", "../lib/java"));
+        assert!(!inside("", "lib/../../java"));
+        assert!(!inside("", "/etc/passwd"));
+        assert!(!inside("bin", "../../etc/passwd"));
+    }
+
+    /// The case a textual check cannot see: `a/b` points at the extraction root, so `a/b/..` is
+    /// above it even though counting components says it is one level down.
+    #[test]
+    fn refuses_a_link_whose_target_runs_through_another_link() {
+        let mut created = HashSet::new();
+        created.insert(PathBuf::from("a/b"));
+
+        assert!(!link_stays_inside(Path::new(""), Path::new("a/b/.."), &created));
+        assert!(!link_stays_inside(Path::new(""), Path::new("a/b/c"), &created));
+        assert!(link_stays_inside(Path::new(""), Path::new("a/other"), &created), "only that link is affected");
     }
 }
