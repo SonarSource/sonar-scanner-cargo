@@ -5,10 +5,16 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version'
+        description: 'Build version to release, e.g. 0.1.0-42 (see the Deploy job summary of the master build)'
         required: true
         type: string
 
+# Releasing does not build: build.yml has already deployed the crate and promoted it to `-builds`.
+# The reusable workflow below finds that build by the trailing number of the version input and
+# promotes it to `-releases`, so only a version a master build produced can be released.
+#
+# Publishing to crates.io is not wired yet; it belongs in the reusable workflow, alongside its
+# existing `publishToPyPI` and `publishToNpmJS` flags.
 jobs:
   release:
     permissions:
