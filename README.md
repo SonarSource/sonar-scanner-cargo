@@ -172,6 +172,78 @@ anything the engine writes to its standard error is reported as `ERROR`.
 The exit code is `0` on success and `1` on a bootstrap failure. Once the engine runs, its exit code
 becomes ours. A malformed command line is a usage error and exits `2`.
 
+## Troubleshooting
+
+Start by separating configuration from connectivity. This command resolves the configuration and
+makes no network request:
+
+```console
+$ cargo sonar-scanner --dry-run
+```
+
+It prints the endpoint, base directory, user home, every resolved property, and the origin of each
+property. Sensitive values are masked. Add `--verbose` (or set `sonar.verbose=true`) to also show
+the loaded files and the resolved properties in the log.
+
+To inspect the resolved scanner-property payload before provisioning or analysis, write it to a
+local file:
+
+```console
+$ cargo sonar-scanner -Dsonar.scanner.internal.dumpToFile=payload.json
+```
+
+The payload contains the real token. The scanner creates the file with owner-only permissions on
+Unix; keep it out of source control, CI artifacts, and support requests, and delete it when done.
+
+### Configuration and command-line options
+
+There is no `SONAR_SCANNER_CLI_ARGS` equivalent. Pass scanner properties directly to Cargo:
+
+```console
+$ cargo sonar-scanner -Dsonar.projectKey=my-project -Dsonar.scanner.connectTimeout=30
+```
+
+For CI, use the corresponding environment variables instead. Named properties such as
+`sonar.token` use `SONAR_TOKEN`; any `sonar.scanner.*` property maps to `SONAR_SCANNER_*`, so
+`sonar.scanner.connectTimeout` becomes `SONAR_SCANNER_CONNECT_TIMEOUT` and
+`sonar.scanner.skipJreProvisioning` becomes `SONAR_SCANNER_SKIP_JRE_PROVISIONING`. Use
+`--dry-run` to confirm the final value and its source.
+
+### Authentication and network failures
+
+For a rejected token (HTTP 401), generate or select a token for the target shown by `--dry-run`,
+then set `SONAR_TOKEN` again. Do not put it in `Cargo.toml`. A 403 means that the token was
+accepted but cannot run analysis for the selected organization or server; check its analysis
+permissions and the project and organization properties.
+
+For an unreachable host, first check the resolved host URL and API base URL with `--dry-run`. The
+HTTP client uses the platform trust store. If a corporate TLS-inspecting proxy is in use, install
+its root certificate in that trust store rather than disabling certificate verification. Standard
+proxy environment variables are used unless scanner proxy properties override them:
+
+```console
+$ cargo sonar-scanner \
+    -Dsonar.scanner.proxyHost=proxy.example.com \
+    -Dsonar.scanner.proxyPort=3128
+```
+
+`sonar.scanner.proxyUser` and `sonar.scanner.proxyPassword` configure proxy credentials when they
+are required. Increase `sonar.scanner.connectTimeout`, `sonar.scanner.socketTimeout`, or
+`sonar.scanner.responseTimeout` for slow but healthy connections; all values are seconds, and a
+response timeout of `0` means no overall limit.
+
+### Provisioning cache and downloads
+
+When JRE and scanner-engine provisioning is enabled, downloads are stored below
+`<sonar.userHome>/cache`, where `sonar.userHome` defaults to `~/.sonar`. The cache is keyed by the
+expected SHA-256 checksum, and incomplete or checksum-mismatched downloads are not installed.
+
+The scanner automatically retries a checksum mismatch once, including fresh metadata. If it still
+fails, investigate the server, proxy, or TLS interception: failed downloads are discarded and never
+installed in the cache. Remove a checksum directory only when a cached artifact is known to have
+been modified or corrupted, after stopping concurrent scanner runs. For JRE download failures, use
+the same network, TLS, proxy, and timeout checks above before clearing the cache.
+
 ## Development
 
 ```console
