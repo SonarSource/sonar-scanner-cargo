@@ -17,9 +17,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The build number is a counter held in the repository's `build_number` custom property, shared
-  # by every SonarSource project. It is taken once per run and handed to the jobs that need it, so
-  # that the deploy and the promotion agree on which build they are talking about.
+  # Taken once per run, so that the deploy and the promotion agree on the build.
   get-build-number:
     runs-on: sonar-xs
     name: Get build number
@@ -179,27 +177,16 @@ jobs:
             -Dsonar.analysis.pipeline=${{ github.run_id }}
             -Dsonar.analysis.repository=${{ github.repository }}
 
-  # A release is a promotion of an existing build, never a rebuild, so the lifecycle is the same as
-  # every other SonarSource project. Every build deploys to the Repox `-qa` repository and is then
-  # promoted out of it: a pull request to `-dev` with status `it-passed-pr`, master to `-builds`
-  # with status `it-passed`, and release.yml takes the very same master build from `-builds` to
-  # `-releases`. Pull request artefacts are what lets a change be tried out before it is merged.
+  # A release is a promotion, never a rebuild: every build deploys to the `-qa` repository and is
+  # promoted out of it — a pull request to `-dev`, master to `-builds`, and release.yml from
+  # `-builds` to `-releases`. Promotion moves what a JFrog build info records, and `cargo publish`
+  # cannot produce one, so the crate is uploaded with the JFrog CLI, on the layout Artifactory
+  # indexes crates from: `crates/<name>/<name>-<version>.crate`.
   #
-  # Promotion moves the artefacts that a JFrog build info records, which is why the crate is
-  # uploaded with the JFrog CLI instead of `cargo publish`: the Cargo client cannot produce build
-  # info, and without it there is nothing for the release to promote. Artifactory recognises and
-  # indexes a directly uploaded crate as long as it lands on the layout it expects,
-  # `crates/<name>/<name>-<version>.crate`.
-  #
-  # Crate versions are immutable, so each build gets its own: `<Cargo.toml version>-<build number>`
-  # (e.g. 0.1.0-42). That is a semver pre-release, so Cargo will not resolve it unless it is asked
-  # for by name, and it is the only build-number shape gh-action_release accepts — it requires
-  # `Major.Minor.Patch` followed by `-`, `.` or `+` and then the bare build number.
+  # Crate versions are immutable, so each build takes its own, `<version>-<build number>`.
   deploy:
     needs: [build, get-build-number]
-    # Master, plus pull requests raised from a branch of this repository. A fork has no access to
-    # Vault, so there is no deploy token to be had and the job would only fail; the merge queue is
-    # excluded too, since its build is the one master will redo on merge.
+    # Forks are excluded: they cannot reach Vault, so there is no deploy token for them.
     if: >-
       github.ref == 'refs/heads/master'
       || (github.event_name == 'pull_request'
@@ -210,20 +197,16 @@ jobs:
       id-token: write
       contents: read
     env:
-      # gh-action_release looks the build info up as <repository name>/<build number>, so the build
-      # name has to be the repository name.
+      # The release looks the build info up by repository name.
       BUILD_NAME: ${{ github.event.repository.name }}
       BUILD_NUMBER: ${{ needs.get-build-number.outputs.BUILD_NUMBER }}
-      # Repox Cargo repositories from PREQ-6665 (re-service-config#2212). The public lifecycle,
-      # matching this repository's visibility: qa -> builds (promote job) -> releases (release.yml).
+      # The public lifecycle, matching this repository's visibility.
       ARTIFACTORY_DEPLOY_REPO: sonarsource-cargo-public-qa
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # The JFrog CLI is not on the sonar-* runners either, so mise provisions it alongside Rust.
-      # mise.local.toml is not committed: it is CI-only, and it is what the shared promote action
-      # writes for itself as well.
+      # mise provisions the JFrog CLI alongside Rust; CI-only, so the file is not committed.
       - name: Pin the JFrog CLI
         run: |
           cat > mise.local.toml <<'EOF'
@@ -262,9 +245,8 @@ jobs:
           replace-with = "repox"
           EOF
 
-      # The build number goes into the manifest rather than onto the command line: Cargo has no
-      # flag for it. Cargo.lock carries the package's own version too, and `--locked` compares the
-      # two, so both files move together.
+      # Cargo has no flag for a build number, and `--locked` compares the manifest version against
+      # Cargo.lock, so both files move together.
       - name: Stamp the build version
         run: |
           release=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -273,21 +255,19 @@ jobs:
             exit 1
           fi
           version="${release}-${BUILD_NUMBER}"
-          # The first `version =` in Cargo.toml is the package's own; in Cargo.lock it is the line
-          # after the package's `name =`. Everything else, dependency versions included, is left be.
+          # The package's own version only: the first in Cargo.toml, the line after its name in
+          # Cargo.lock. Dependency versions are left be.
           awk -v v="$version" '!done && /^version = /{print "version = \"" v "\""; done=1; next} {print}' \
             Cargo.toml > Cargo.toml.stamped && mv Cargo.toml.stamped Cargo.toml
           awk -v v="$version" '/^name = "cargo-sonar-scanner"$/{print; getline; print "version = \"" v "\""; next} {print}' \
             Cargo.lock > Cargo.lock.stamped && mv Cargo.lock.stamped Cargo.lock
-          # The promote action and gh-action_release both read the version back out of the build
-          # info, where it arrives via `jf rt build-collect-env` below.
+          # Reaches the build info via `jf rt build-collect-env` below, where the promotion and the
+          # release read it back.
           echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
           echo "Building $BUILD_NAME/$BUILD_NUMBER as $version"
 
-      # `--allow-dirty` because the step above edits the manifest in the working tree; the contents
-      # of the package are still pinned by the `include` list in Cargo.toml, which the build job
-      # prints on every run. The default verification build is kept: it is the last check that the
-      # packaged crate compiles on its own.
+      # `--allow-dirty`: the stamp above edits the manifest. The verification build is kept — it is
+      # the last check that the packaged crate compiles on its own.
       - name: Package the crate
         env:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
@@ -303,8 +283,7 @@ jobs:
             --artifactory-url https://repox.jfrog.io/artifactory \
             --access-token "$ARTIFACTORY_DEPLOY_TOKEN"
           jf config use repox
-          # --fail-no-op: a silent zero-file upload would produce an empty build info, and the
-          # release would then promote nothing at all.
+          # --fail-no-op: an empty build info would silently promote nothing.
           jf rt upload --fail-no-op \
             --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
             "target/package/cargo-sonar-scanner-${PROJECT_VERSION}.crate" \
@@ -318,13 +297,9 @@ jobs:
           echo "Deployed \`cargo-sonar-scanner $PROJECT_VERSION\` to \`$ARTIFACTORY_DEPLOY_REPO\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Build info: \`$BUILD_NAME/$BUILD_NUMBER\`" >> "$GITHUB_STEP_SUMMARY"
 
-  # Promotes the build out of `-qa` — to `-dev` for a pull request, to `-builds` for master — and
-  # puts the build version on the commit as a GitHub status, which is what the releasability checks
-  # look for. The action derives both the target and the status from the branch; all it needs is
-  # the repository the deploy job wrote to.
-  #
-  # BUILD_NUMBER is passed in so that the action promotes the build the deploy job published,
-  # rather than taking a fresh number of its own.
+  # Promotes out of `-qa` — to `-dev` for a pull request, to `-builds` for master — and puts the
+  # build version on the commit as a GitHub status. BUILD_NUMBER is passed in so that the action
+  # promotes the build the deploy job published rather than taking a fresh number.
   promote:
     needs: [deploy, get-build-number]
     runs-on: sonar-xs

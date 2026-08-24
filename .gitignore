@@ -1,5 +1,4 @@
 /target
 /.cargo/config.toml
-# Written by CI to provision the JFrog CLI; never committed, so that a workstation `mise install`
-# does not pull in a release-only tool.
+# Written by CI to provision the JFrog CLI.
 /mise.local.toml

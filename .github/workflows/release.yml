@@ -9,19 +9,12 @@ on:
         required: true
         type: string
 
-# Releasing does not build anything. build.yml has already deployed the crate to
-# sonarsource-cargo-public-qa and promoted it to sonarsource-cargo-public-builds; the reusable
-# workflow below looks the build info up as sonar-scanner-cargo/<build number> — the trailing
-# number of the version input — and promotes that same build to sonarsource-cargo-public-releases
-# with status `released`, after the releasability checks pass.
+# Releasing does not build: build.yml has already deployed the crate and promoted it to `-builds`.
+# The reusable workflow below finds that build by the trailing number of the version input and
+# promotes it to `-releases`, so only a version a master build produced can be released.
 #
-# It follows that a version can only be released if a master build produced it: the version input
-# must be one Repox already knows, not a number invented here.
-#
-# Publishing to crates.io is not wired yet (SCANCARGO-8) and will be automatic when it is, the way
-# the other scanners reach PyPI and npmjs: gh-action_release takes a `publishToPyPI` /
-# `publishToNpmJS` flag and does the public publication itself, so the equivalent Cargo flag
-# belongs there rather than in a hand-rolled job here.
+# Publishing to crates.io is not wired yet; it belongs in the reusable workflow, alongside its
+# existing `publishToPyPI` and `publishToNpmJS` flags.
 jobs:
   release:
     permissions:
