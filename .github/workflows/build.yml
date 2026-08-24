@@ -137,6 +137,15 @@ jobs:
       - name: Inspect the package contents
         run: cargo package --list --locked
 
+      # `--list` prints files but never validates the manifest for a registry. The dry run packages
+      # the crate and builds it in isolation, so a missing field or a path dependency fails here
+      # rather than on the one publish that cannot be taken back. The registry is named explicitly
+      # because a default registry in the environment is rejected against `package.publish`.
+      - name: Validate the crate for publication
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo publish --dry-run --locked --registry crates-io
+
   # Analysis of this repository itself. Dependency analysis (SCA) runs as part of the SonarQube
   # scan, which is what the organisation-wide `check-sca` workflow waits for — it polls the
   # project's default branch and the pull request, so a PR analysis is enough to satisfy it.
