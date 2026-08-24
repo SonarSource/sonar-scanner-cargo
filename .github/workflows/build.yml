@@ -283,11 +283,19 @@ jobs:
             --artifactory-url https://repox.jfrog.io/artifactory \
             --access-token "$ARTIFACTORY_DEPLOY_TOKEN"
           jf config use repox
-          # --fail-no-op: an empty build info would silently promote nothing.
-          jf rt upload --fail-no-op \
+          crate="cargo-sonar-scanner-${PROJECT_VERSION}.crate"
+          dir="crates/cargo-sonar-scanner"
+          # --flat, or the source hierarchy is preserved and the crate lands under a `target/package`
+          # of its own. --fail-no-op, or an empty build info would silently promote nothing.
+          jf rt upload --flat=true --fail-no-op \
             --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
-            "target/package/cargo-sonar-scanner-${PROJECT_VERSION}.crate" \
-            "${ARTIFACTORY_DEPLOY_REPO}/crates/cargo-sonar-scanner/"
+            "target/package/$crate" "${ARTIFACTORY_DEPLOY_REPO}/${dir}/"
+          # A crate anywhere but `crates/<name>/<name>-<version>.crate` is stored but never indexed,
+          # so it would be published and still unresolvable.
+          if ! jf rt search "${ARTIFACTORY_DEPLOY_REPO}/${dir}/${crate}" | grep -q "$crate"; then
+            echo "::error::${dir}/${crate} is not in ${ARTIFACTORY_DEPLOY_REPO}"
+            exit 1
+          fi
           jf rt build-collect-env "$BUILD_NAME" "$BUILD_NUMBER"
           jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER"
           jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
