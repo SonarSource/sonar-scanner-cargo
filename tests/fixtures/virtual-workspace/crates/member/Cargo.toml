@@ -1,0 +1,9 @@
+[package]
+name = "workspace-member"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.sonar]
+project-key = "fixtures_workspace-member"
+project-name = "Workspace member fixture"
+exclusions = ["target/**"]

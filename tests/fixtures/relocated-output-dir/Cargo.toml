@@ -1,0 +1,9 @@
+[package]
+name = "relocated-output-dir"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.sonar]
+project-key = "fixtures_relocated-output-dir"
+project-name = "Relocated output directory fixture"
+exclusions = ["build-output/**"]

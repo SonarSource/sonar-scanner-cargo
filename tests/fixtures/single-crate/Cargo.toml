@@ -1,0 +1,9 @@
+[package]
+name = "single-crate"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.sonar]
+project-key = "fixtures_single-crate"
+project-name = "Single crate fixture"
+exclusions = ["target/**"]
