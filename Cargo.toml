@@ -12,6 +12,9 @@ repository = "https://github.com/SonarSource/sonar-scanner-cargo"
 documentation = "https://docs.rs/cargo-sonar-scanner"
 categories = ["development-tools", "development-tools::cargo-plugins"]
 keywords = ["sonarqube", "sonar", "static-analysis", "code-quality", "cargo-subcommand"]
+# An allowlist, not a destination: crates.io is the only registry this crate may be published to.
+# CI does not publish with Cargo — it uploads the packaged crate to Repox with the JFrog CLI, so
+# that the deploy is recorded in a build info and the release can promote it.
 publish = ["crates-io"]
 # A published .crate is public and immutable: list what goes in it explicitly, rather than
 # excluding what must stay out and hoping the list stays complete.

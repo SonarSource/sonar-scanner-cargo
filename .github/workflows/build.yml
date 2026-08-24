@@ -17,6 +17,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The build number is a counter held in the repository's `build_number` custom property, shared
+  # by every SonarSource project. It is taken once per run and handed to the jobs that need it, so
+  # that the deploy and the promotion agree on which build they are talking about.
+  get-build-number:
+    runs-on: sonar-xs
+    name: Get build number
+    permissions:
+      id-token: write
+    outputs:
+      BUILD_NUMBER: ${{ steps.get-build-number.outputs.BUILD_NUMBER }}
+    steps:
+      - uses: SonarSource/ci-github-actions/get-build-number@983645f538ff01044b1e567adb23e6f527d8b52a # 1.8.9
+        id: get-build-number
+
   build:
     # For guidance on runner selection, visit:
     # https://xtranet-sonarsource.atlassian.net/wiki/spaces/Platform/pages/3694231566/GitHub+Actions+Runner+-+GitHub
@@ -165,21 +179,53 @@ jobs:
             -Dsonar.analysis.pipeline=${{ github.run_id }}
             -Dsonar.analysis.repository=${{ github.repository }}
 
-  # Publishing a crate is not a snapshot operation: crate versions are immutable, so a given
-  # version can be pushed exactly once. Until the release pipeline and the versioning scheme are
-  # settled (SCANCARGO-2), this job stays disabled — it runs only once the CARGO_REPOX_REPO
-  # repository variable names the target Repox registry.
+  # A release is a promotion of an existing build, never a rebuild, so the lifecycle is the same as
+  # every other SonarSource project: master deploys to the Repox `-qa` repository and promotes to
+  # `-builds`; release.yml promotes the very same build from `-builds` to `-releases`.
+  #
+  # Promotion moves the artefacts that a JFrog build info records, which is why the crate is
+  # uploaded with the JFrog CLI instead of `cargo publish`: the Cargo client cannot produce build
+  # info, and without it there is nothing for the release to promote. Artifactory recognises and
+  # indexes a directly uploaded crate as long as it lands on the layout it expects,
+  # `crates/<name>/<name>-<version>.crate`.
+  #
+  # Crate versions are immutable, so each build gets its own: `<Cargo.toml version>-<build number>`
+  # (e.g. 0.1.0-42). That is a semver pre-release, so Cargo will not resolve it unless it is asked
+  # for by name, and it is the only build-number shape gh-action_release accepts — it requires
+  # `Major.Minor.Patch` followed by `-`, `.` or `+` and then the bare build number.
   deploy:
-    needs: build
-    if: github.ref == 'refs/heads/master' && vars.CARGO_REPOX_REPO != ''
+    needs: [build, get-build-number]
+    if: github.ref == 'refs/heads/master'
     runs-on: sonar-xs
     name: Deploy
     permissions:
       id-token: write
       contents: read
+    env:
+      # gh-action_release looks the build info up as <repository name>/<build number>, so the build
+      # name has to be the repository name.
+      BUILD_NAME: ${{ github.event.repository.name }}
+      BUILD_NUMBER: ${{ needs.get-build-number.outputs.BUILD_NUMBER }}
+      # Repox Cargo repositories from PREQ-6665 (re-service-config#2212). The public lifecycle,
+      # matching this repository's visibility: qa -> builds (promote job) -> releases (release.yml).
+      ARTIFACTORY_DEPLOY_REPO: sonarsource-cargo-public-qa
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # The JFrog CLI is not on the sonar-* runners either, so mise provisions it alongside Rust.
+      # mise.local.toml is not committed: it is CI-only, and it is what the shared promote action
+      # writes for itself as well.
+      - name: Pin the JFrog CLI
+        run: |
+          cat > mise.local.toml <<'EOF'
+          [tools]
+          jfrog-cli = "2.115.0"
+
+          [env]
+          JFROG_CLI_AVOID_NEW_VERSION_WARNING = "true"
+          JFROG_CLI_ENV_EXCLUDE = "*password*;*secret*;*key*;*token*;*auth*;*credential*"
+          EOF
 
       - name: Set up tools
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
@@ -193,27 +239,95 @@ jobs:
           secrets: |
             development/artifactory/token/{REPO_OWNER_NAME_DASH}-qa-deployer access_token | ARTIFACTORY_DEPLOY_TOKEN;
 
-      - name: Configure the Repox registries
-        env:
-          CARGO_REPOX_REPO: ${{ vars.CARGO_REPOX_REPO }}
+      # Only for resolving dependencies while packaging; the deploy goes through the JFrog CLI.
+      - name: Route crates.io through Repox
         run: |
           mkdir -p .cargo
-          cat > .cargo/config.toml <<EOF
+          cat > .cargo/config.toml <<'EOF'
           [registry]
           global-credential-providers = ["cargo:token"]
 
           [registries.repox]
           index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
 
-          [registries.repox-deploy]
-          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/${CARGO_REPOX_REPO}/index/"
-
           [source.crates-io]
           replace-with = "repox"
           EOF
 
-      - name: Publish to Repox
+      # The build number goes into the manifest rather than onto the command line: Cargo has no
+      # flag for it. Cargo.lock carries the package's own version too, and `--locked` compares the
+      # two, so both files move together.
+      - name: Stamp the build version
+        run: |
+          release=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [[ -z "$release" ]]; then
+            echo "::error::Cargo.toml declares no version"
+            exit 1
+          fi
+          version="${release}-${BUILD_NUMBER}"
+          # The first `version =` in Cargo.toml is the package's own; in Cargo.lock it is the line
+          # after the package's `name =`. Everything else, dependency versions included, is left be.
+          awk -v v="$version" '!done && /^version = /{print "version = \"" v "\""; done=1; next} {print}' \
+            Cargo.toml > Cargo.toml.stamped && mv Cargo.toml.stamped Cargo.toml
+          awk -v v="$version" '/^name = "cargo-sonar-scanner"$/{print; getline; print "version = \"" v "\""; next} {print}' \
+            Cargo.lock > Cargo.lock.stamped && mv Cargo.lock.stamped Cargo.lock
+          # The promote action and gh-action_release both read the version back out of the build
+          # info, where it arrives via `jf rt build-collect-env` below.
+          echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Building $BUILD_NAME/$BUILD_NUMBER as $version"
+
+      # `--allow-dirty` because the step above edits the manifest in the working tree; the contents
+      # of the package are still pinned by the `include` list in Cargo.toml, which the build job
+      # prints on every run. The default verification build is kept: it is the last check that the
+      # packaged crate compiles on its own.
+      - name: Package the crate
         env:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
-          CARGO_REGISTRIES_REPOX_DEPLOY_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
-        run: cargo publish --registry repox-deploy --locked
+        run: cargo package --locked --allow-dirty
+
+      - name: Deploy to Repox
+        env:
+          ARTIFACTORY_DEPLOY_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
+        run: |
+          jf config remove repox > /dev/null 2>&1 || true
+          jf config add repox \
+            --url https://repox.jfrog.io \
+            --artifactory-url https://repox.jfrog.io/artifactory \
+            --access-token "$ARTIFACTORY_DEPLOY_TOKEN"
+          jf config use repox
+          # --fail-no-op: a silent zero-file upload would produce an empty build info, and the
+          # release would then promote nothing at all.
+          jf rt upload --fail-no-op \
+            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
+            "target/package/cargo-sonar-scanner-${PROJECT_VERSION}.crate" \
+            "${ARTIFACTORY_DEPLOY_REPO}/crates/cargo-sonar-scanner/"
+          jf rt build-collect-env "$BUILD_NAME" "$BUILD_NUMBER"
+          jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER"
+          jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
+
+      - name: Summarise
+        run: |
+          echo "Deployed \`cargo-sonar-scanner $PROJECT_VERSION\` to \`$ARTIFACTORY_DEPLOY_REPO\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build info: \`$BUILD_NAME/$BUILD_NUMBER\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # Promotes qa -> builds with status `it-passed` and puts the build version on the commit as a
+  # GitHub status, which is what the releasability checks look for. release.yml then takes the same
+  # build from `-builds` to `-releases`.
+  #
+  # BUILD_NUMBER is passed in so that the action promotes the build the deploy job published,
+  # rather than taking a fresh number of its own.
+  promote:
+    needs: [deploy, get-build-number]
+    if: github.ref == 'refs/heads/master'
+    runs-on: sonar-xs
+    name: Promote
+    permissions:
+      id-token: write
+      contents: write  # the permission set the action documents
+    env:
+      BUILD_NUMBER: ${{ needs.get-build-number.outputs.BUILD_NUMBER }}
+    steps:
+      - name: Promote to sonarsource-cargo-public-builds
+        uses: SonarSource/ci-github-actions/promote@983645f538ff01044b1e567adb23e6f527d8b52a # 1.8.9
+        with:
+          artifactory-deploy-repo: sonarsource-cargo-public-qa
