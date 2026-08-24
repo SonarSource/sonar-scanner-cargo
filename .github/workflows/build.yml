@@ -180,8 +180,10 @@ jobs:
             -Dsonar.analysis.repository=${{ github.repository }}
 
   # A release is a promotion of an existing build, never a rebuild, so the lifecycle is the same as
-  # every other SonarSource project: master deploys to the Repox `-qa` repository and promotes to
-  # `-builds`; release.yml promotes the very same build from `-builds` to `-releases`.
+  # every other SonarSource project. Every build deploys to the Repox `-qa` repository and is then
+  # promoted out of it: a pull request to `-dev` with status `it-passed-pr`, master to `-builds`
+  # with status `it-passed`, and release.yml takes the very same master build from `-builds` to
+  # `-releases`. Pull request artefacts are what lets a change be tried out before it is merged.
   #
   # Promotion moves the artefacts that a JFrog build info records, which is why the crate is
   # uploaded with the JFrog CLI instead of `cargo publish`: the Cargo client cannot produce build
@@ -195,7 +197,13 @@ jobs:
   # `Major.Minor.Patch` followed by `-`, `.` or `+` and then the bare build number.
   deploy:
     needs: [build, get-build-number]
-    if: github.ref == 'refs/heads/master'
+    # Master, plus pull requests raised from a branch of this repository. A fork has no access to
+    # Vault, so there is no deploy token to be had and the job would only fail; the merge queue is
+    # excluded too, since its build is the one master will redo on merge.
+    if: >-
+      github.ref == 'refs/heads/master'
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: sonar-xs
     name: Deploy
     permissions:
@@ -310,15 +318,15 @@ jobs:
           echo "Deployed \`cargo-sonar-scanner $PROJECT_VERSION\` to \`$ARTIFACTORY_DEPLOY_REPO\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Build info: \`$BUILD_NAME/$BUILD_NUMBER\`" >> "$GITHUB_STEP_SUMMARY"
 
-  # Promotes qa -> builds with status `it-passed` and puts the build version on the commit as a
-  # GitHub status, which is what the releasability checks look for. release.yml then takes the same
-  # build from `-builds` to `-releases`.
+  # Promotes the build out of `-qa` — to `-dev` for a pull request, to `-builds` for master — and
+  # puts the build version on the commit as a GitHub status, which is what the releasability checks
+  # look for. The action derives both the target and the status from the branch; all it needs is
+  # the repository the deploy job wrote to.
   #
   # BUILD_NUMBER is passed in so that the action promotes the build the deploy job published,
   # rather than taking a fresh number of its own.
   promote:
     needs: [deploy, get-build-number]
-    if: github.ref == 'refs/heads/master'
     runs-on: sonar-xs
     name: Promote
     permissions:
@@ -327,7 +335,8 @@ jobs:
     env:
       BUILD_NUMBER: ${{ needs.get-build-number.outputs.BUILD_NUMBER }}
     steps:
-      - name: Promote to sonarsource-cargo-public-builds
+      - name: Promote out of sonarsource-cargo-public-qa
         uses: SonarSource/ci-github-actions/promote@983645f538ff01044b1e567adb23e6f527d8b52a # 1.8.9
         with:
           artifactory-deploy-repo: sonarsource-cargo-public-qa
+          promote-pull-request: 'true'
