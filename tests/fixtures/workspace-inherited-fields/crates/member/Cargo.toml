@@ -1,0 +1,10 @@
+[package]
+name = "workspace-inherited-member"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.sonar]
+project-key = "fixtures_workspace-inherited-member"
+project-name = "Workspace inherited member fixture"
+exclusions = ["target/**"]

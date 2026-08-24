@@ -143,6 +143,42 @@ java-opts = "-Xmx1g"
 }
 
 #[test]
+fn cargo_fixtures_expose_the_expected_analysis_configuration() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let cases = [
+        ("single-crate", "fixtures_single-crate", "Single crate fixture", "target/**"),
+        ("virtual-workspace", "fixtures_virtual-workspace", "Virtual workspace fixture", "target/**"),
+        ("virtual-workspace/crates/member", "fixtures_workspace-member", "Workspace member fixture", "target/**"),
+        (
+            "workspace-inherited-fields/crates/member",
+            "fixtures_workspace-inherited-member",
+            "Workspace inherited member fixture",
+            "target/**",
+        ),
+        (
+            "relocated-output-dir",
+            "fixtures_relocated-output-dir",
+            "Relocated output directory fixture",
+            "build-output/**",
+        ),
+    ];
+
+    for (relative_path, key, name, exclusions) in cases {
+        let fixture = fixtures.join(relative_path);
+        let run = run(&fixture, &[], &["sonar-scanner", "--dry-run"]);
+        run.assert_success();
+        assert!(run.stdout.contains(&format!("sonar.projectKey={key}   [Cargo.toml]")), "{}", run.stdout);
+        assert!(run.stdout.contains(&format!("sonar.projectName={name}   [Cargo.toml]")), "{}", run.stdout);
+        assert!(run.stdout.contains(&format!("sonar.exclusions={exclusions}   [Cargo.toml]")), "{}", run.stdout);
+        assert!(
+            run.stdout.contains(&format!("sonar.projectBaseDir={}   [bootstrapper]", fixture.display())),
+            "{}",
+            run.stdout
+        );
+    }
+}
+
+#[test]
 fn a_credential_in_the_manifest_is_warned_about_but_not_printed() {
     let dir = tempdir();
     let secret = FAKE_TOKEN;

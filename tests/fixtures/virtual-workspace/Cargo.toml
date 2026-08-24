@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/member"]
+resolver = "3"
+
+[workspace.metadata.sonar]
+project-key = "fixtures_virtual-workspace"
+project-name = "Virtual workspace fixture"
+exclusions = ["target/**"]
