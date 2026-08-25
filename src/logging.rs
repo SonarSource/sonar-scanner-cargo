@@ -28,6 +28,7 @@ use std::fmt::Display;
 use std::io::Write;
 use std::sync::OnceLock;
 
+use chrono::Local;
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
 /// Replacement for any registered secret.
@@ -46,7 +47,8 @@ impl Log for ScannerLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
-        let line = format!("{}: {}", record.level(), redact(&record.args().to_string()));
+        let line =
+            format_log_line(Local::now().format("%H:%M:%S%.3f"), record.level(), redact(&record.args().to_string()));
         // ERROR goes to stderr, everything else to stdout.
         if record.level() == Level::Error {
             let mut out = std::io::stderr().lock();
@@ -61,6 +63,10 @@ impl Log for ScannerLogger {
         let _ = std::io::stdout().flush();
         let _ = std::io::stderr().flush();
     }
+}
+
+fn format_log_line(timestamp: impl Display, level: impl Display, message: impl Display) -> String {
+    format!("{timestamp} {level:<5} {message}")
 }
 
 /// Install the scanner logger. Subsequent calls are ignored, as the facade allows only one logger.
@@ -135,5 +141,13 @@ mod tests {
     fn ignores_values_too_short_to_be_credentials() {
         assert!("us".len() < MIN_SECRET_LEN);
         assert_eq!(redact_with(&[], "sonar.region=us"), "sonar.region=us");
+    }
+
+    #[test]
+    fn formats_log_lines_like_the_scanner_cli() {
+        assert_eq!(format_log_line("12:34:56.789", "INFO", "started"), "12:34:56.789 INFO  started");
+        assert_eq!(format_log_line("12:34:56.789", "WARN", "check this"), "12:34:56.789 WARN  check this");
+        assert_eq!(format_log_line("12:34:56.789", "DEBUG", "details"), "12:34:56.789 DEBUG details");
+        assert_eq!(format_log_line("12:34:56.789", "ERROR", "failed"), "12:34:56.789 ERROR failed");
     }
 }
