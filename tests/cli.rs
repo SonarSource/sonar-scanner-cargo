@@ -185,7 +185,7 @@ fn a_credential_in_the_manifest_is_warned_about_but_not_printed() {
     write(&dir.path().join("Cargo.toml"), &format!("[package.metadata.sonar]\ntoken = \"{secret}\"\n"));
     let run = run(dir.path(), &[], &["sonar-scanner", "--dry-run"]);
     run.assert_success();
-    assert!(run.stdout.contains("WARN:"), "{}", run.stdout);
+    assert!(run.stdout.contains(" WARN  "), "{}", run.stdout);
     assert!(run.stdout.contains("Credentials do not belong in a manifest"), "{}", run.stdout);
     assert!(!run.all_output().contains(secret), "the token leaked:\n{}", run.all_output());
 }
@@ -205,17 +205,17 @@ fn the_token_never_reaches_a_log_stream() {
 fn verbose_enables_debug_logging() {
     let dir = tempdir();
     let quiet = run(dir.path(), &[], &["sonar-scanner", "--dry-run"]);
-    assert!(!quiet.all_output().contains("DEBUG:"), "{}", quiet.all_output());
+    assert!(!quiet.all_output().contains(" DEBUG "), "{}", quiet.all_output());
 
     let verbose = run(dir.path(), &[], &["sonar-scanner", "--dry-run", "-v"]);
     verbose.assert_success();
-    assert!(verbose.stdout.contains("DEBUG:"), "{}", verbose.stdout);
+    assert!(verbose.stdout.contains(" DEBUG "), "{}", verbose.stdout);
 
     // `sonar.verbose` from a properties file has the same effect as `-v`.
     write(&dir.path().join("sonar-project.properties"), "sonar.verbose=true\n");
     let from_file = run(dir.path(), &[], &["sonar-scanner", "--dry-run"]);
     from_file.assert_success();
-    assert!(from_file.stdout.contains("DEBUG:"), "{}", from_file.stdout);
+    assert!(from_file.stdout.contains(" DEBUG "), "{}", from_file.stdout);
 }
 
 #[test]
@@ -303,9 +303,20 @@ fn works_when_invoked_directly_rather_than_through_cargo() {
 
     // The bootstrap timestamp differs between runs; everything else must be identical.
     let strip_timestamp = |output: &str| {
-        output.lines().filter(|line| !line.contains("sonar.scanner.bootstrapStartTime")).collect::<Vec<_>>().join("\n")
+        output
+            .lines()
+            .filter(|line| !line.contains("sonar.scanner.bootstrapStartTime"))
+            .map(strip_log_timestamp)
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     assert_eq!(strip_timestamp(&direct.stdout), strip_timestamp(&through_cargo.stdout));
+}
+
+fn strip_log_timestamp(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let timestamp = bytes.len() >= 13 && bytes[2] == b':' && bytes[5] == b':' && bytes[8] == b'.' && bytes[12] == b' ';
+    if timestamp { &line[13..] } else { line }
 }
 
 struct TempDir(PathBuf);

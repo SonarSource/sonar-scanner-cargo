@@ -33,6 +33,7 @@ name = "cargo-sonar-scanner"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
 # The pure-Rust inflate backend: the release build cross-compiles, and a C dependency would need a
