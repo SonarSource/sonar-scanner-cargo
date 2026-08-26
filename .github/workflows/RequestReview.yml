@@ -1,0 +1,32 @@
+---
+name: Request review
+# yamllint disable-line rule:truthy
+on:
+  pull_request:
+    types: [review_requested]
+
+# Moves the issue through the "Request Review" transition and assigns it to the reviewer.
+jobs:
+  RequestReview_job:
+    name: Request review
+    runs-on: sonar-xs
+    permissions:
+      id-token: write
+    # A fork cannot reach Vault, so there is no token to act with; move the ticket by hand instead.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - id: secrets
+        uses: SonarSource/vault-action-wrapper@0a3114fe1230b784c35b53b099f9ab1f1e538cc7 # 3.5.0
+        with:
+          secrets: |
+            development/github/token/{REPO_OWNER_NAME_DASH}-jira token | GITHUB_TOKEN;
+            development/kv/data/jira user | JIRA_USER;
+            development/kv/data/jira token | JIRA_TOKEN;
+
+      # Tracked by major version rather than by commit: this action is our own, and we want its
+      # fixes without waiting for someone to bump a pin.
+      - uses: sonarsource/gh-action-lt-backlog/RequestReview@v2
+        with:
+          github-token: ${{ fromJSON(steps.secrets.outputs.vault).GITHUB_TOKEN }}
+          jira-user: ${{ fromJSON(steps.secrets.outputs.vault).JIRA_USER }}
+          jira-token: ${{ fromJSON(steps.secrets.outputs.vault).JIRA_TOKEN }}
