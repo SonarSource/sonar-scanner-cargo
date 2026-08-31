@@ -2,3 +2,8 @@
 /.cargo/config.toml
 # Written by CI to provision the JFrog CLI.
 /mise.local.toml
+# Left in an analysed project by an end-to-end run: the scanner writes its working directory, and
+# the Rust analyzer invokes cargo, which builds a lock file and a target directory.
+tests/fixtures/**/.sonar/
+tests/fixtures/**/target/
+tests/fixtures/**/Cargo.lock
