@@ -228,18 +228,30 @@ jobs:
           replace-with = "repox"
           EOF
 
-      # `cargo zigbuild` only where a C compiler is actually needed. Everywhere else the platform's
-      # own linker is the right one and plain `cargo build` uses it.
-      - name: Build
+      # `cargo zigbuild` only on Linux, the one family whose TLS backend has to be compiled.
+      - name: Build (Linux)
+        if: contains(matrix.target, 'linux')
         shell: bash
         env:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
-        run: |
-          if [[ "${{ matrix.target }}" == *linux* ]]; then
-            cargo zigbuild --release --locked --features vendored-openssl --target ${{ matrix.target }}
-          else
-            cargo build --release --locked --target ${{ matrix.target }}
-          fi
+        run: cargo zigbuild --release --locked --features vendored-openssl --target ${{ matrix.target }}
+
+      - name: Build (macOS)
+        if: contains(matrix.target, 'apple')
+        shell: bash
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Not bash, unlike every other step here: Git for Windows ships a coreutils `/usr/bin/link.exe`,
+      # which shadows the MSVC linker of the same name on a bash PATH. rustc then invokes GNU `link`
+      # and every crate fails with "extra operand".
+      - name: Build (Windows)
+        if: contains(matrix.target, 'windows')
+        shell: pwsh
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       # The licence has to travel with the binary: someone who downloads an archive never sees the
       # repository or the crate.
