@@ -33,7 +33,8 @@ toolchain to run an analysis:
 | macOS aarch64 | `cargo-sonar-scanner-<version>-aarch64-apple-darwin.tar.gz` |
 | Windows x86_64 | `cargo-sonar-scanner-<version>-x86_64-pc-windows-gnu.zip` |
 
-`cargo-sonar-scanner-<version>.sha256` alongside them carries the checksums.
+`cargo-sonar-scanner-<version>-checksums.txt` alongside them carries the SHA-256 sums, in
+`sha256sum -c` format.
 
 The Linux builds are statically linked against musl, so one archive per architecture covers musl and
 glibc distributions alike. The macOS binaries are **not signed or notarised yet**, so Gatekeeper

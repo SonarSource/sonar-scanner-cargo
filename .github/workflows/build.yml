@@ -457,7 +457,9 @@ jobs:
           # Written outside the directory first: redirecting into it would have the shell create the
           # file before the glob expands, and the checksum list would contain itself.
           sha256sum cargo-sonar-scanner-* > ../checksums
-          mv ../checksums "cargo-sonar-scanner-${PROJECT_VERSION}.sha256"
+          # Deliberately not `.sha256`: Artifactory reads an uploaded `<file>.sha256` as a checksum
+          # to apply to `<file>`, and rejects the upload because no such artefact exists.
+          mv ../checksums "cargo-sonar-scanner-${PROJECT_VERSION}-checksums.txt"
           ls -l
 
       - name: Deploy to Repox
