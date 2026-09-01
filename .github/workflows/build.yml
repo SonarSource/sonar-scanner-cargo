@@ -243,15 +243,24 @@ jobs:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      # Not bash, unlike every other step here: Git for Windows ships a coreutils `/usr/bin/link.exe`,
-      # which shadows the MSVC linker of the same name on a bash PATH. rustc then invokes GNU `link`
-      # and every crate fails with "extra operand".
+      # A Unix-toolchain `link.exe` — Git for Windows and MSYS both ship one as a coreutils applet —
+      # shadows the MSVC linker of the same name whenever its directory comes first on PATH. rustc
+      # invokes plain `link.exe`, gets the wrong one, and every crate fails to link with GNU's
+      # "extra operand". Drop those directories for the build, and log what `link.exe` resolves to
+      # either side of it so a future failure here is diagnosable from the log alone.
       - name: Build (Windows)
         if: contains(matrix.target, 'windows')
         shell: powershell
         env:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: |
+          Write-Host "link.exe before:"
+          Get-Command link.exe -All -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Source)" }
+          $env:PATH = ($env:PATH -split ';' |
+            Where-Object { $_ -notmatch '(?i)(Git\\usr\\bin|Git\\bin|msys|mingw|cygwin|usr\\bin)' }) -join ';'
+          Write-Host "link.exe after:"
+          Get-Command link.exe -All -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Source)" }
+          cargo build --release --locked --target ${{ matrix.target }}
 
       # The licence has to travel with the binary: someone who downloads an archive never sees the
       # repository or the crate.
