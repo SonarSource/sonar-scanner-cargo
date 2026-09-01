@@ -31,7 +31,7 @@ toolchain to run an analysis:
 | Linux aarch64 | `cargo-sonar-scanner-<version>-aarch64-unknown-linux-musl.tar.gz` |
 | macOS x86_64 | `cargo-sonar-scanner-<version>-x86_64-apple-darwin.tar.gz` |
 | macOS aarch64 | `cargo-sonar-scanner-<version>-aarch64-apple-darwin.tar.gz` |
-| Windows x86_64 | `cargo-sonar-scanner-<version>-x86_64-pc-windows-msvc.zip` |
+| Windows x86_64 | `cargo-sonar-scanner-<version>-x86_64-pc-windows-gnu.zip` |
 
 `cargo-sonar-scanner-<version>.sha256` alongside them carries the checksums.
 

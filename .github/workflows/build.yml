@@ -149,15 +149,20 @@ jobs:
 
   # Prebuilt binaries, so that using the scanner does not require compiling it.
   #
-  # `native-tls` decides the shape of this matrix. It resolves to OpenSSL on Linux,
-  # Security.framework on macOS and SChannel on Windows, so only the Linux targets need a C
-  # toolchain, and only they build OpenSSL from source (`vendored-openssl`, see Cargo.toml). Zig
-  # supplies that toolchain through cargo-zigbuild, the same way sonar-rust-enterprise cross-compiles
-  # its analyzer. macOS and Windows build on their own runners instead: their TLS backends are
-  # platform SDK libraries, which is exactly what a cross-compiler does not have.
+  # `native-tls` decides the shape of this matrix, because it resolves to a different library per
+  # platform: OpenSSL on Linux, SChannel on Windows, Security.framework on macOS.
+  #
+  # Linux and Windows cross-compile from one runner with cargo-zigbuild, as sonar-rust-enterprise
+  # does. Zig is the C compiler that builds OpenSSL for the Linux targets (`vendored-openssl`, see
+  # Cargo.toml), and it ships the mingw import libraries that SChannel needs, so Windows needs no
+  # toolchain of its own — and no Windows runner. macOS builds natively: linking
+  # Security.framework wants the real SDK.
   #
   # Linux ships musl only. A static musl binary runs on glibc systems too, so a separate gnu build
   # would be a second artefact with no additional reach.
+  #
+  # Windows is the `gnu` target rather than `msvc` for the same reason: `msvc` needs `link.exe`,
+  # which means a Windows runner with Visual Studio on it.
   #
   # Every target is built on every run, including pull requests. This matrix is new and each leg is
   # the only thing standing between a broken target and a user who downloads it; trim it to one leg
@@ -177,20 +182,20 @@ jobs:
             runner: sonar-m
           - target: aarch64-unknown-linux-musl
             runner: sonar-m
+          - target: x86_64-pc-windows-gnu
+            runner: sonar-m
           - target: x86_64-apple-darwin
             runner: macos-latest-large
           - target: aarch64-apple-darwin
             runner: macos-latest-xlarge
-          - target: x86_64-pc-windows-msvc
-            runner: warp-custom-windows-2022-m
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # zig is only needed by the Linux legs, but mise reads one file, and installing it everywhere
-      # would put a toolchain on the macOS and Windows runners that nothing there uses.
-      - name: Pin zig for the Linux targets
-        if: contains(matrix.target, 'linux')
+      # zig is only needed by the legs that cross-compile, so it is not installed on the macOS
+      # runners, which build natively.
+      - name: Pin zig for the cross-compiled targets
+        if: ${{ !contains(matrix.target, 'apple') }}
         run: |
           cat > mise.local.toml <<'EOF'
           [tools]
@@ -228,13 +233,17 @@ jobs:
           replace-with = "repox"
           EOF
 
-      # `cargo zigbuild` only on Linux, the one family whose TLS backend has to be compiled.
-      - name: Build (Linux)
-        if: contains(matrix.target, 'linux')
+      # Only Linux needs `vendored-openssl`: it is the one target family whose `native-tls` has a
+      # library to compile. Windows links SChannel, whose import libraries zig ships.
+      - name: Build (cross-compiled)
+        if: ${{ !contains(matrix.target, 'apple') }}
         shell: bash
         env:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
-        run: cargo zigbuild --release --locked --features vendored-openssl --target ${{ matrix.target }}
+        run: |
+          features=()
+          [[ "${{ matrix.target }}" == *linux* ]] && features=(--features vendored-openssl)
+          cargo zigbuild --release --locked "${features[@]}" --target ${{ matrix.target }}
 
       - name: Build (macOS)
         if: contains(matrix.target, 'apple')
@@ -242,25 +251,6 @@ jobs:
         env:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
         run: cargo build --release --locked --target ${{ matrix.target }}
-
-      # A Unix-toolchain `link.exe` — Git for Windows and MSYS both ship one as a coreutils applet —
-      # shadows the MSVC linker of the same name whenever its directory comes first on PATH. rustc
-      # invokes plain `link.exe`, gets the wrong one, and every crate fails to link with GNU's
-      # "extra operand". Drop those directories for the build, and log what `link.exe` resolves to
-      # either side of it so a future failure here is diagnosable from the log alone.
-      - name: Build (Windows)
-        if: contains(matrix.target, 'windows')
-        shell: powershell
-        env:
-          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
-        run: |
-          Write-Host "link.exe before:"
-          Get-Command link.exe -All -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Source)" }
-          $env:PATH = ($env:PATH -split ';' |
-            Where-Object { $_ -notmatch '(?i)(Git\\usr\\bin|Git\\bin|msys|mingw|cygwin|usr\\bin)' }) -join ';'
-          Write-Host "link.exe after:"
-          Get-Command link.exe -All -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Source)" }
-          cargo build --release --locked --target ${{ matrix.target }}
 
       # The licence has to travel with the binary: someone who downloads an archive never sees the
       # repository or the crate.
@@ -281,10 +271,22 @@ jobs:
         shell: bash
         run: tar -czf "dist/${STAGE}.tar.gz" -C dist "$STAGE"
 
+      # A zip rather than a tarball, because that is what a Windows user expects to be handed, even
+      # though it is now built on Linux. `zip` is not on a minimal runner by default, so fall back to
+      # Python's, and fail loudly rather than silently shipping no Windows archive.
       - name: Pack (zip)
         if: contains(matrix.target, 'windows')
-        shell: powershell
-        run: Compress-Archive -Path "dist/$env:STAGE" -DestinationPath "dist/$env:STAGE.zip"
+        shell: bash
+        run: |
+          cd dist
+          if command -v zip > /dev/null; then
+            zip -qr "${STAGE}.zip" "$STAGE"
+          elif command -v python3 > /dev/null; then
+            python3 -m zipfile -c "${STAGE}.zip" "$STAGE"
+          else
+            echo "::error::neither zip nor python3 is available to build the Windows archive"
+            exit 1
+          fi
 
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
