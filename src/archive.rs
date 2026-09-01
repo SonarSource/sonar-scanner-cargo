@@ -91,7 +91,9 @@ fn untar(archive: &Path, into: &Path) -> io::Result<()> {
     // `MultiGzDecoder` rather than `GzDecoder`: a tarball compressed by pigz is several concatenated
     // gzip members, and reading only the first one would silently extract a truncated JRE.
     let mut tar = tar::Archive::new(flate2::read::MultiGzDecoder::new(file));
-    tar.set_preserve_permissions(true);
+    // Permissions are applied by us, through `set_mode`, rather than left to `unpack_in`: that is
+    // what masks off the group/other write bits an archive should not be trusted to set.
+    tar.set_preserve_permissions(false);
     tar.set_overwrite(true);
 
     let mut symlinks = HashSet::new();
@@ -134,7 +136,10 @@ fn untar(archive: &Path, into: &Path) -> io::Result<()> {
         }
 
         // `unpack_in` is what refuses to leave `into`; it reports a skipped entry rather than failing.
-        if !entry.unpack_in(into)? {
+        let mode = entry.header().mode()?;
+        if entry.unpack_in(into)? {
+            set_mode(&into.join(&path), Some(mode))?;
+        } else {
             warn!(
                 "Skipping {} from {}: it would be extracted outside the target directory",
                 path.display(),
@@ -311,13 +316,17 @@ fn create_symlink(destination: &Path, at: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
-/// Apply the mode a zip entry recorded. Windows has nothing to apply it to.
+/// Apply the mode an archive entry recorded. Windows has nothing to apply it to.
+///
+/// The group and other write bits are masked off first: nothing extracted here — a JRE or a
+/// prebuilt binary — needs to be group- or world-writable, and an archive is not a source whose
+/// mode should be trusted to say otherwise.
 #[cfg(unix)]
 fn set_mode(path: &Path, mode: Option<u32>) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     match mode {
-        Some(mode) => std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)),
+        Some(mode) => std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & !0o022)),
         None => Ok(()),
     }
 }
@@ -404,6 +413,24 @@ pub(crate) mod tests {
         let mode = |path: &str| std::fs::metadata(into.join(path)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode("bin/java"), 0o755);
         assert_eq!(mode("release"), 0o644);
+    }
+
+    /// A `.tar.gz` is checksum-verified against what the server reported, but that only says the
+    /// bytes are the ones it sent, not that the mode inside is one worth trusting.
+    #[cfg(unix)]
+    #[test]
+    fn strips_world_and_group_write_from_a_tar_gz_entry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir();
+        let archive = tar_gz(dir.path(), "jre.tar.gz", &[("bin/java", "#!/bin/sh\n", 0o777)]);
+        let into = dir.path().join("into");
+        std::fs::create_dir(&into).unwrap();
+
+        extract(&archive, &into).unwrap();
+
+        let mode = std::fs::metadata(into.join("bin/java")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "the executable bit survives but not the group/other write bit");
     }
 
     /// A `.tar.gz` of the given symlinks, as `(path, target)`. Only the unix tests build one.
@@ -580,6 +607,23 @@ pub(crate) mod tests {
 
         let mode = std::fs::metadata(into.join("bin/java")).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755);
+    }
+
+    /// Same defence as the `.tar.gz` counterpart, for the format Windows JREs actually arrive in.
+    #[cfg(unix)]
+    #[test]
+    fn strips_world_and_group_write_from_a_zip_entry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir();
+        let archive = zip_of(dir.path(), "jre.zip", &[("bin/java", "#!/bin/sh\n", 0o777)]);
+        let into = dir.path().join("into");
+        std::fs::create_dir(&into).unwrap();
+
+        extract(&archive, &into).unwrap();
+
+        let mode = std::fs::metadata(into.join("bin/java")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "the executable bit survives but not the group/other write bit");
     }
 
     /// A JRE records modes on its directories too, and `conf` arriving world-writable because the
