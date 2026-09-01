@@ -248,7 +248,7 @@ jobs:
       # and every crate fails with "extra operand".
       - name: Build (Windows)
         if: contains(matrix.target, 'windows')
-        shell: pwsh
+        shell: powershell
         env:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
         run: cargo build --release --locked --target ${{ matrix.target }}
@@ -274,7 +274,7 @@ jobs:
 
       - name: Pack (zip)
         if: contains(matrix.target, 'windows')
-        shell: pwsh
+        shell: powershell
         run: Compress-Archive -Path "dist/$env:STAGE" -DestinationPath "dist/$env:STAGE.zip"
 
       - name: Upload
