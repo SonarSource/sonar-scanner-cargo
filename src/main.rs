@@ -32,6 +32,7 @@ mod platform;
 mod process;
 #[cfg(test)]
 mod test_server;
+mod tls;
 mod version;
 
 use std::collections::BTreeMap;

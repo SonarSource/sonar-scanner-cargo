@@ -133,6 +133,36 @@ When the same key is given as both `--sonar-token` and `-Dsonar.token=…`, the 
 `--dry-run` prints the origin of every resolved property, which is the quickest way to answer
 "where did that value come from?".
 
+## Custom certificates
+
+Behind a TLS-intercepting proxy, or against a server with a private certificate authority, point the
+scanner at a PKCS#12 truststore:
+
+```console
+$ cargo sonar-scanner -Dsonar.scanner.truststorePath=/path/to/truststore.p12 \
+                      -Dsonar.scanner.truststorePassword=...
+```
+
+Trust is **widened, not replaced** — the operating system's certificates keep working, so a
+truststore holding only your corporate root does not cut off anything else.
+
+If the server asks for a client certificate, supply a keystore holding the private key and its
+chain, with `sonar.scanner.keystorePath` and `sonar.scanner.keystorePassword`.
+
+| | Default path | Default password |
+| --- | --- | --- |
+| Truststore | `<sonar.userHome>/ssl/truststore.p12` | `changeit`, then `sonar` |
+| Keystore | `<sonar.userHome>/ssl/keystore.p12` | `changeit`, then `sonar` |
+
+**Both default paths are read whether or not you set a property**, so dropping a `truststore.p12`
+into `~/.sonar/ssl` is enough on its own. A file that is missing there is not an error; a file at a
+path you *did* configure and that is missing is. When you set a password, only that password is
+tried — the defaults are not substituted for it, so a typo reports a password failure rather than
+silently opening a differently protected store.
+
+The same four properties reach the scanner engine, which applies them to its own connections, so one
+truststore covers the whole analysis.
+
 ## Endpoint resolution
 
 | Configuration | Product | Host URL | API base URL |

@@ -104,7 +104,7 @@ sonar-scanner-cargo/
 |---|---|---|
 | CLI | `clap` (derive) | standard; supports `-D key=value` repeated |
 | HTTP | `ureq` (blocking) | every bootstrap step is sequential — no async runtime needed; small dependency tree; streaming bodies |
-| TLS | `native-tls` backend | uses OS trust roots so corporate TLS interception works out of the box (design §8 "Compatibility"), and gives PKCS#12 client identities for free if `sonar.scanner.keystorePath` is implemented later |
+| TLS | `native-tls` backend | uses OS trust roots so corporate TLS interception works out of the box (design §8 "Compatibility"), and accepts the PKCS#12 client identity that `sonar.scanner.keystorePath` requires — §5.13. This is why rustls is not an option: a pure-Rust stack would remove the per-target OpenSSL build, but the contract needs PKCS#12 |
 | JSON | `serde` + `serde_json` | stdin payload, API responses, NDJSON log parsing |
 | Checksums | `sha2` | server returns `sha256` |
 | Archives | `zip`, `flate2` + `tar` | JRE archives are `.zip` or `.tar.gz`; `tar` preserves unix permissions |
@@ -141,9 +141,14 @@ Deliberately **not** async, and **not** `reqwest` — see design §8 "Performanc
 `sonar.scanner.internal.dumpToFile` · `sonar.scanner.internal.sqVersion` (testing hooks — implement both,
 they make the whole bootstrap testable without a server).
 
-Pass-through only (bootstrapper does not act on them in v1, but must forward them to the engine):
-`sonar.scanner.truststorePath` / `truststorePassword` / `keystorePath` / `keystorePassword`.
-*(pysonar does not implement these bootstrapper-side either — see OQ-4.)*
+`sonar.scanner.truststorePath` / `truststorePassword` / `keystorePath` / `keystorePassword` —
+**used by the bootstrapper for its own API calls, and forwarded to the engine.** The guidelines mark
+"Bootstrapper uses it" for all four, so forwarding alone does not satisfy the contract. Defaults are
+`<sonar.userHome>/ssl/truststore.p12` and `<sonar.userHome>/ssl/keystore.p12`, probed whether or not
+a property is set; the password defaults to `changeit`, with `sonar` tried as a fallback.
+
+The truststore is **additive**: "used by the Scanner in addition to OS + built-in certificates".
+Implemented in `src/tls.rs`; see §5.13 for the one place this leaks into behaviour.
 
 ### 5.3 Configuration precedence (highest first)
 
@@ -285,6 +290,26 @@ x86_64 binary under Rosetta reports `x86_64`). Accepted corner case; `sonar.scan
 |---|---|---|
 | `sonar.projectBaseDir` | current working directory | Set explicitly. Engines ≥ 10.6 default to cwd anyway, but setting it makes the dry-run dump honest and keeps older servers working. Do **not** walk up looking for a workspace root — that would require reading `Cargo.toml`. Running from inside a member crate therefore analyses that member; document it. |
 | `sonar.buildsystem.autoconfig.disabled` | ~~`false`, **user-overridable**~~ **not set** | Engine-side auto-config became opt-in in `SCANENGINE-542`, so sending `false` looked necessary. It is not: the engine's `isBuildSystemAutoConfigurationEnabled` also requires `sonar.scanner.app == "ScannerCLI"`, so with `app = "cargo"` the property changes nothing today, and the bootstrapper does not forward a default it cannot make true. **This becomes a live decision the moment engine M0 lands:** the property's own default in the engine is `true`, so once `"cargo"` is allow-listed, auto-config still stays off unless the engine flips that default (`SCANENGINE-557`) or the bootstrapper starts sending `false` after all. Decide there, not here. |
+
+### 5.13 Truststore and keystore
+
+Both are read by the bootstrapper for its own HTTPS calls, not merely forwarded — see §5.2 for the
+properties, defaults and password rules. Implemented in `src/tls.rs`.
+
+One implementation detail has behavioural consequences and is therefore recorded here rather than
+left in the code. `ureq`'s `RootCerts` is an enum: `PlatformVerifier` **or** a specific list, never
+both, and choosing a list calls `disable_built_in_roots(true)` on the native-tls connector. The
+contract's "in addition to OS + built-in certificates" cannot be expressed directly, so when a
+truststore exists the platform's own roots are enumerated (`rustls-native-certs`) and handed over
+together with the truststore's.
+
+That substitution is not free. On macOS and Windows the platform *verifier* applies per-certificate
+trust settings and policy that a flat root list cannot carry, so trust becomes slightly more
+permissive in shape. It is confined as tightly as possible: with no truststore — the ordinary case —
+the verifier is left completely alone. Revisit if `ureq` ever grows an additive option.
+
+The engine receives all four properties unchanged and applies them to its own calls, so a user
+configures one truststore, not two.
 
 ---
 
@@ -490,10 +515,19 @@ an existing artifact — the guidelines, a reference implementation, or the serv
 | OQ-1 | ~~Scanner identity~~ — **DECIDED: `sonar.scanner.app = "cargo"`**, per the guidelines' naming convention. (`ScannerCLI`/`ScannerMSBuild` are legacy spellings; pysonar already sends plain `"python"`.) Engine M0 hard-codes the identical string. Remaining action: announce the value before GA so telemetry dashboards and any server-side allow-lists learn it. | resolved |
 | OQ-2 | ~~**Configuration file names.**~~ **Settled by M1.** `sonar-project.properties` in the base dir and `<sonar.userHome>/sonar-scanner.properties`, both as proposed. The third part was decided the other way: `[package.metadata.sonar]` *is* read, and outranks `sonar-project.properties` — see M1's notes for why that does not reintroduce a split namespace. | resolved |
 | OQ-3 | ~~**Minimum supported server version.**~~ **DECIDED: 10.6**, implemented in `src/version.rs`. Verified against both reference implementations rather than assumed: the Java library's `SQ_VERSION_NEW_BOOTSTRAPPING` and pysonar's `MIN_SUPPORTED_SQ_VERSION` are both 10.6. Supporting LTS 9.9 would require the legacy classloader path, which we deliberately do not carry; an older server gets a message pointing at the SonarScanner CLI. | resolved |
-| OQ-4 | **Truststore / keystore.** v1 uses OS trust roots and merely forwards `sonar.scanner.truststorePath`/`keystorePath` to the engine (pysonar does the same). Acceptable, or must the bootstrapper itself honour a PKCS#12 truststore for its own API calls? *(Recommendation: forward only in v1; `native-tls` leaves the door open.)* | M2 scope |
 | OQ-5 | **Licensing and crates.io metadata.** The licence expression, contributor-rights model, required notices and public support expectations. The *publication pipeline* half of this question is answered: `sonartech` + Vault token + `gh-action_release`, see M5. What remains needs a licensing sign-off, which is not a technical decision. | M5 |
 | OQ-6 | ~~**Cross-origin redirect credential policy.**~~ **DECIDED: origin-scoped**, implemented in `src/http.rs`. The token is sent only to origins matching the resolved `sonar.host.url`/`sonar.scanner.apiBaseUrl`, so a redirect to a CDN carries no credential. Redirects are followed by our own code, one hop at a time, because `ureq`'s `SameHost` policy ignores the port and would leak the token across two origins on the same host. Asserted by tests against a real socket. | resolved |
 | OQ-7 | **Log format.** Match `sonar-scanner-cli`'s exact output shape (`INFO: …`) — verify against the CLI's real output before freezing, since users grep it in CI. | M3 |
+
+**OQ-4 has been removed, not resolved.** It asked whether the bootstrapper should honour a PKCS#12
+truststore for its own API calls, and recommended forwarding the properties only. That was never a
+question: the guidelines mark "Bootstrapper uses it" for all four truststore and keystore properties
+and give each a default path, so forwarding alone does not meet the contract. Listing it as open
+invited a choice that was not ours to make, and its recommendation was the wrong answer. The
+behaviour is specified in §5.2 and §5.13 and implemented in `src/tls.rs`.
+
+The lesson generalises: this table is for questions the contract leaves open. Anything the two
+Confluence pages settle belongs in §5, whether or not we have got round to building it.
 
 ---
 
