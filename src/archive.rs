@@ -91,9 +91,10 @@ fn untar(archive: &Path, into: &Path) -> io::Result<()> {
     // `MultiGzDecoder` rather than `GzDecoder`: a tarball compressed by pigz is several concatenated
     // gzip members, and reading only the first one would silently extract a truncated JRE.
     let mut tar = tar::Archive::new(flate2::read::MultiGzDecoder::new(file));
-    // Permissions are applied by us, through `set_mode`, rather than left to `unpack_in`: that is
-    // what masks off the group/other write bits an archive should not be trusted to set.
-    tar.set_preserve_permissions(false);
+    // `set_mask` makes `unpack_in` apply `mode & !0o022` on the file handle itself, so the
+    // group/other write bits an archive should not be trusted to set are never on disk.
+    tar.set_mask(0o022);
+    tar.set_preserve_permissions(true);
     tar.set_overwrite(true);
 
     let mut symlinks = HashSet::new();
@@ -136,10 +137,9 @@ fn untar(archive: &Path, into: &Path) -> io::Result<()> {
         }
 
         // `unpack_in` is what refuses to leave `into`; it reports a skipped entry rather than failing.
-        let mode = entry.header().mode()?;
-        if entry.unpack_in(into)? {
-            set_mode(&into.join(&path), Some(mode))?;
-        } else {
+        // Its mode is now applied by `set_mask`/`set_preserve_permissions` above, so no explicit
+        // `set_mode` call is needed here.
+        if !entry.unpack_in(into)? {
             warn!(
                 "Skipping {} from {}: it would be extracted outside the target directory",
                 path.display(),
