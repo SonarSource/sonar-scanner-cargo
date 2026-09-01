@@ -147,6 +147,157 @@ jobs:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
         run: cargo publish --dry-run --locked --registry crates-io
 
+  # Prebuilt binaries, so that using the scanner does not require compiling it.
+  #
+  # `native-tls` decides the shape of this matrix, because it resolves to a different library per
+  # platform: OpenSSL on Linux, SChannel on Windows, Security.framework on macOS.
+  #
+  # Linux and Windows cross-compile from one runner with cargo-zigbuild, as sonar-rust-enterprise
+  # does. Zig is the C compiler that builds OpenSSL for the Linux targets (`vendored-openssl`, see
+  # Cargo.toml), and it ships the mingw import libraries that SChannel needs, so Windows needs no
+  # toolchain of its own — and no Windows runner. macOS builds natively: linking
+  # Security.framework wants the real SDK.
+  #
+  # Linux ships musl only. A static musl binary runs on glibc systems too, so a separate gnu build
+  # would be a second artefact with no additional reach.
+  #
+  # Windows is the `gnu` target rather than `msvc` for the same reason: `msvc` needs `link.exe`,
+  # which means a Windows runner with Visual Studio on it.
+  #
+  # Every target is built on every run, including pull requests. This matrix is new and each leg is
+  # the only thing standing between a broken target and a user who downloads it; trim it to one leg
+  # on pull requests if the runner cost becomes the greater concern.
+  binaries:
+    needs: get-build-number
+    name: Binary (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: sonar-m
+          - target: aarch64-unknown-linux-musl
+            runner: sonar-m
+          - target: x86_64-pc-windows-gnu
+            runner: sonar-m
+          - target: x86_64-apple-darwin
+            runner: macos-latest-large
+          - target: aarch64-apple-darwin
+            runner: macos-latest-xlarge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # zig is only needed by the legs that cross-compile, so it is not installed on the macOS
+      # runners, which build natively.
+      - name: Pin zig for the cross-compiled targets
+        if: ${{ !contains(matrix.target, 'apple') }}
+        run: |
+          cat > mise.local.toml <<'EOF'
+          [tools]
+          zig = "0.13"
+          "cargo:cargo-zigbuild" = "0.23.3"
+          EOF
+
+      - name: Set up tools
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.7.7
+
+      - name: Add the Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Vault
+        id: secrets
+        uses: SonarSource/vault-action-wrapper@0a3114fe1230b784c35b53b099f9ab1f1e538cc7 # 3.5.0
+        with:
+          secrets: |
+            development/artifactory/token/{REPO_OWNER_NAME_DASH}-public-reader access_token | ARTIFACTORY_ACCESS_TOKEN;
+
+      - name: Route crates.io through Repox
+        shell: bash
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [registry]
+          global-credential-providers = ["cargo:token"]
+
+          [registries.repox]
+          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
+
+          [source.crates-io]
+          replace-with = "repox"
+          EOF
+
+      # Only Linux needs `vendored-openssl`: it is the one target family whose `native-tls` has a
+      # library to compile. Windows links SChannel, whose import libraries zig ships.
+      - name: Build (cross-compiled)
+        if: ${{ !contains(matrix.target, 'apple') }}
+        shell: bash
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: |
+          features=()
+          [[ "${{ matrix.target }}" == *linux* ]] && features=(--features vendored-openssl)
+          cargo zigbuild --release --locked "${features[@]}" --target ${{ matrix.target }}
+
+      - name: Build (macOS)
+        if: contains(matrix.target, 'apple')
+        shell: bash
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # The licence has to travel with the binary: someone who downloads an archive never sees the
+      # repository or the crate.
+      - name: Stage the archive contents
+        shell: bash
+        run: |
+          stage="cargo-sonar-scanner-${{ matrix.target }}"
+          suffix=""
+          [[ "${{ matrix.target }}" == *windows* ]] && suffix=".exe"
+          mkdir -p "dist/$stage"
+          cp "target/${{ matrix.target }}/release/cargo-sonar-scanner$suffix" "dist/$stage/"
+          cp LICENSE.txt NOTICE.txt README.md "dist/$stage/"
+          echo "STAGE=$stage" >> "$GITHUB_ENV"
+
+      # Unversioned here: the deploy job owns the version, so that only one place derives it.
+      - name: Pack (tar.gz)
+        if: ${{ !contains(matrix.target, 'windows') }}
+        shell: bash
+        run: tar -czf "dist/${STAGE}.tar.gz" -C dist "$STAGE"
+
+      # A zip rather than a tarball, because that is what a Windows user expects to be handed, even
+      # though it is now built on Linux. `zip` is not on a minimal runner by default, so fall back to
+      # Python's, and fail loudly rather than silently shipping no Windows archive.
+      - name: Pack (zip)
+        if: contains(matrix.target, 'windows')
+        shell: bash
+        run: |
+          cd dist
+          if command -v zip > /dev/null; then
+            zip -qr "${STAGE}.zip" "$STAGE"
+          elif command -v python3 > /dev/null; then
+            python3 -m zipfile -c "${STAGE}.zip" "$STAGE"
+          else
+            echo "::error::neither zip nor python3 is available to build the Windows archive"
+            exit 1
+          fi
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
   # Analysis of this repository itself. Dependency analysis (SCA) runs as part of the SonarQube
   # scan, which is what the organisation-wide `check-sca` workflow waits for — it polls the
   # project's default branch and the pull request, so a PR analysis is enough to satisfy it.
@@ -195,7 +346,7 @@ jobs:
   #
   # Crate versions are immutable, so each build takes its own, `<version>-<build number>`.
   deploy:
-    needs: [build, get-build-number]
+    needs: [build, binaries, get-build-number]
     # Forks are excluded: they cannot reach Vault, so there is no deploy token for them.
     if: >-
       github.ref == 'refs/heads/master'
@@ -283,6 +434,34 @@ jobs:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
         run: cargo package --locked --allow-dirty
 
+      - name: Collect the prebuilt binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: binary-*
+          path: binaries
+          merge-multiple: true
+
+      # Named with the version only now, so the binaries job never has to derive one. The checksum
+      # is generated here rather than per-runner so that all of them come from one implementation.
+      - name: Name and checksum the binaries
+        run: |
+          cd binaries
+          for archive in *; do
+            case "$archive" in
+              cargo-sonar-scanner-*.tar.gz) target="${archive#cargo-sonar-scanner-}"; target="${target%.tar.gz}"; ext="tar.gz" ;;
+              cargo-sonar-scanner-*.zip)    target="${archive#cargo-sonar-scanner-}"; target="${target%.zip}";    ext="zip" ;;
+              *) echo "::error::unexpected artefact $archive"; exit 1 ;;
+            esac
+            mv "$archive" "cargo-sonar-scanner-${PROJECT_VERSION}-${target}.${ext}"
+          done
+          # Written outside the directory first: redirecting into it would have the shell create the
+          # file before the glob expands, and the checksum list would contain itself.
+          sha256sum cargo-sonar-scanner-* > ../checksums
+          # Deliberately not `.sha256`: Artifactory reads an uploaded `<file>.sha256` as a checksum
+          # to apply to `<file>`, and rejects the upload because no such artefact exists.
+          mv ../checksums "cargo-sonar-scanner-${PROJECT_VERSION}-checksums.txt"
+          ls -l
+
       - name: Deploy to Repox
         env:
           ARTIFACTORY_DEPLOY_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
@@ -306,6 +485,12 @@ jobs:
             echo "::error::${dir}/${crate} is not in ${ARTIFACTORY_DEPLOY_REPO}"
             exit 1
           fi
+          # Same build info as the crate, so a release promotes the binaries with it rather than
+          # leaving them behind in `-qa`. No index layout to respect here: unlike the crate, nothing
+          # resolves these by path.
+          jf rt upload --flat=true --fail-no-op \
+            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
+            "binaries/*" "${ARTIFACTORY_DEPLOY_REPO}/binaries/cargo-sonar-scanner/${PROJECT_VERSION}/"
           jf rt build-collect-env "$BUILD_NAME" "$BUILD_NUMBER"
           jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER"
           jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
