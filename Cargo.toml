@@ -32,6 +32,19 @@ include = [
 name = "cargo-sonar-scanner"
 path = "src/main.rs"
 
+[features]
+# Build OpenSSL from source and link it statically, for the released Linux binaries only.
+#
+# `native-tls` resolves to Security.framework on macOS and SChannel on Windows, both provided by the
+# OS. On Linux it resolves to OpenSSL, so a binary built against the runner's libssl only runs where
+# that exact soname exists. Vendoring makes one Linux binary per architecture that runs anywhere,
+# which is the whole point of shipping one. `openssl-probe` still locates the system CA bundle at
+# runtime, so the OS trust store — the reason `native-tls` was chosen — keeps working.
+#
+# Off by default: `cargo install` builds for the machine it runs on, where the system OpenSSL is the
+# right answer and a source build is a slow surprise.
+vendored-openssl = ["dep:openssl"]
+
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
@@ -59,6 +72,12 @@ url = "2"
 # Deflate is the only method a JRE archive uses; the rest of the compression zoo stays out of the
 # binary, and out of the dependency audit.
 zip = { version = "8", default-features = false, features = ["deflate"] }
+
+# Not called from any code: depending on it is how the `vendored` feature reaches the `openssl-sys`
+# that `native-tls` pulls in, since Cargo unifies features across the graph. Linux-only, because it
+# is the only platform whose `native-tls` uses OpenSSL at all.
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"], optional = true }
 
 [profile.release]
 strip = true

@@ -20,6 +20,25 @@ $ cargo install --path .          # from a checkout
 The binary is called `cargo-sonar-scanner`; once it is on `PATH`, Cargo resolves
 `cargo sonar-scanner`. It also works when invoked directly as `cargo-sonar-scanner <args…>`.
 
+### Prebuilt binaries
+
+Every build also produces a self-contained binary per platform, so CI does not need a Rust
+toolchain to run an analysis:
+
+| Platform | Archive |
+| --- | --- |
+| Linux x86_64 | `cargo-sonar-scanner-<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux aarch64 | `cargo-sonar-scanner-<version>-aarch64-unknown-linux-musl.tar.gz` |
+| macOS x86_64 | `cargo-sonar-scanner-<version>-x86_64-apple-darwin.tar.gz` |
+| macOS aarch64 | `cargo-sonar-scanner-<version>-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `cargo-sonar-scanner-<version>-x86_64-pc-windows-msvc.zip` |
+
+`cargo-sonar-scanner-<version>.sha256` alongside them carries the checksums.
+
+The Linux builds are statically linked against musl, so one archive per architecture covers musl and
+glibc distributions alike. The macOS binaries are **not signed or notarised yet**, so Gatekeeper
+quarantines one that a browser downloaded — see [troubleshooting](#troubleshooting).
+
 ## Usage
 
 ```console
@@ -243,6 +262,22 @@ fails, investigate the server, proxy, or TLS interception: failed downloads are 
 installed in the cache. Remove a checksum directory only when a cached artifact is known to have
 been modified or corrupted, after stopping concurrent scanner runs. For JRE download failures, use
 the same network, TLS, proxy, and timeout checks above before clearing the cache.
+
+### A downloaded macOS binary will not run
+
+```
+"cargo-sonar-scanner" cannot be opened because the developer cannot be verified.
+```
+
+The macOS archives are not signed or notarised yet, so Gatekeeper quarantines a binary that arrived
+through a browser. Either fetch it with `curl`, which does not set the quarantine attribute, or clear
+the attribute:
+
+```console
+$ xattr -d com.apple.quarantine cargo-sonar-scanner
+```
+
+CI is unaffected: runners download with `curl` or an action, not a browser.
 
 ## Development
 
