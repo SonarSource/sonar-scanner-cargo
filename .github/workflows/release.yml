@@ -8,18 +8,35 @@ on:
         description: 'Build version to release, e.g. 0.1.0-42 (see the Deploy job summary of the master build)'
         required: true
         type: string
+      publishToCratesIo:
+        description: 'Publish the crate to crates.io. IRREVERSIBLE — a published version can never be
+          replaced or removed, only yanked. Off for the first release, which goes to Repox only.'
+        required: false
+        type: boolean
+        default: false
+      dryRun:
+        description: 'Rehearse without releasing. Skips releasability, the promotion and the GitHub
+          release; the crates.io job still runs, as `cargo publish --dry-run`.'
+        required: false
+        type: boolean
+        default: false
 
 # Releasing does not build: build.yml has already deployed the crate and promoted it to `-builds`.
 # The reusable workflow below finds that build by the trailing number of the version input and
 # promotes it to `-releases`, so only a version a master build produced can be released.
 #
-# Publishing to crates.io is not wired yet; it belongs in the reusable workflow, alongside its
-# existing `publishToPyPI` and `publishToNpmJS` flags.
+# Two destinations, deliberately decoupled. Repox is the promotion and is repeatable. crates.io is
+# public and immutable, so it is opt-in per run: leave `publishToCratesIo` off until a `dryRun: true`
+# rehearsal of the same version has passed.
 jobs:
   release:
     permissions:
       id-token: write
       contents: write
-    uses: SonarSource/gh-action_release/.github/workflows/main.yaml@0c9c1cc54cbdd24258f135601d1b77cfc87e67ae # 7.4.0
+    # TODO: pinned to the head of gh-action_release PR #413, which adds publishToCratesIo. Swap for
+    # the release tag that contains it as soon as that PR is merged and gh-action_release is tagged.
+    uses: SonarSource/gh-action_release/.github/workflows/main.yaml@fe21ded32d0763fdb77a13be883532706476296c
     with:
       version: ${{ inputs.version }}
+      publishToCratesIo: ${{ inputs.publishToCratesIo }}
+      dryRun: ${{ inputs.dryRun }}
