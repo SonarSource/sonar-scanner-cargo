@@ -30,16 +30,17 @@
 //! TLS-intercepting proxy works as soon as its root is trusted by the machine.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use log::{debug, warn};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
-use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
+use ureq::tls::{Certificate, ClientCert, PrivateKey, RootCerts, TlsConfig, TlsProvider};
 use ureq::{Agent, Body, Proxy, ProxyProtocol, http::Response};
 use url::Url;
 
-use crate::config::{Properties, TOKEN};
+use crate::config::{Properties, TOKEN, USER_HOME};
 use crate::endpoint::Endpoint;
 
 /// Seconds to wait for the TCP connection and the TLS handshake.
@@ -100,6 +101,13 @@ pub enum HttpError {
     Status { status: u16, url: String },
     #[error("Gave up after {MAX_REDIRECTS} redirects, the last one to {url}")]
     TooManyRedirects { url: String },
+    #[error("{0}")]
+    Tls(#[from] crate::tls::TlsError),
+    #[error("The client certificate key from the keystore could not be used")]
+    ClientKey {
+        #[source]
+        source: ureq::Error,
+    },
     #[error("Failed to call {url}")]
     Transport {
         url: String,
@@ -144,6 +152,51 @@ pub struct HttpClient {
     host_url: String,
 }
 
+/// Build the TLS configuration, honouring `sonar.scanner.truststorePath` and `keystorePath`.
+///
+/// `RootCerts` is an enum, so "the platform verifier, plus these" cannot be asked for: naming
+/// specific roots switches the built-in ones off. [`crate::tls`] therefore returns the platform's
+/// own roots alongside the truststore's, and this only leaves `PlatformVerifier` in place when there
+/// is no truststore at all — which is the common case, and the one where the verifier's
+/// per-certificate trust decisions are worth keeping.
+fn tls_config(properties: &Properties) -> Result<TlsConfig> {
+    let user_home = PathBuf::from(properties.get(USER_HOME).unwrap_or_default());
+    let stores = crate::tls::resolve(properties, &user_home)?;
+
+    let mut builder = TlsConfig::builder().provider(TlsProvider::NativeTls);
+    builder = match &stores.roots {
+        Some(roots) => {
+            builder.root_certs(RootCerts::from(roots.iter().map(|der| Certificate::from_der(der).to_owned())))
+        }
+        None => builder.root_certs(RootCerts::PlatformVerifier),
+    };
+    if let Some(identity) = &stores.client_identity {
+        let chain: Vec<Certificate<'static>> =
+            identity.chain.iter().map(|der| Certificate::from_der(der).to_owned()).collect();
+        // The key goes in as PEM even though we hold DER, because `PrivateKey::from_der` takes a
+        // `KeyKind` that `ureq` does not re-export — it is unnameable here, so that constructor
+        // cannot be called. `PRIVATE KEY` is the PKCS#8 label, which is how a PKCS#12 file stores
+        // the key once decrypted, and PKCS#8 is the only kind the native-tls backend accepts.
+        let key = PrivateKey::from_pem(pem(&identity.key, "PRIVATE KEY").as_bytes())
+            .map_err(|source| HttpError::ClientKey { source })?;
+        builder = builder.client_cert(Some(ClientCert::new_with_certs(&chain, key)));
+    }
+    Ok(builder.build())
+}
+
+/// DER to PEM, 64 characters to a line as the format requires.
+fn pem(der: &[u8], label: &str) -> String {
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut out = format!("-----BEGIN {label}-----\n");
+    for line in encoded.as_bytes().chunks(64) {
+        out.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
+        out.push('\n');
+    }
+    out.push_str(&format!("-----END {label}-----\n"));
+    out
+}
+
 impl HttpClient {
     pub fn new(properties: &Properties, endpoint: &Endpoint) -> Result<Self> {
         let socket_timeout = seconds(properties, SOCKET_TIMEOUT, DEFAULT_SOCKET_TIMEOUT);
@@ -162,9 +215,7 @@ impl HttpClient {
             .timeout_recv_response(Some(socket_timeout))
             .timeout_recv_body(Some(socket_timeout))
             .timeout_global(optional_seconds(properties, RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT))
-            .tls_config(
-                TlsConfig::builder().provider(TlsProvider::NativeTls).root_certs(RootCerts::PlatformVerifier).build(),
-            );
+            .tls_config(tls_config(properties)?);
         // Left alone, the agent picks the proxy up from the environment; only override it when the
         // properties actually configure one.
         if let Some(proxy) = configured_proxy(properties)? {
@@ -812,6 +863,62 @@ mod tests {
 
         assert_eq!(configured_proxy(&properties).unwrap().unwrap().port(), DEFAULT_PROXY_PORT);
         assert!(configured_proxy(&Properties::new()).unwrap().is_none(), "no proxy host means no explicit proxy");
+    }
+
+    /// The counterpart of `crate::tls`'s own tests: those stop at `Stores`, so nothing had exercised
+    /// `Certificate::from_der(..).to_owned()` feeding `RootCerts::from` until this test.
+    #[test]
+    fn tls_config_trusts_a_generated_truststore() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("truststore.p12");
+        let (bytes, expected) = crate::tls::tests::truststore("changeit", 2);
+        std::fs::write(&path, &bytes).unwrap();
+        let properties: Properties = [
+            (USER_HOME.to_string(), home.path().display().to_string()),
+            (crate::tls::TRUSTSTORE_PATH.to_string(), path.display().to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let config = tls_config(&properties).expect("a generated truststore must build a TLS config");
+
+        let RootCerts::Specific(roots) = config.root_certs() else {
+            panic!("a configured truststore must produce a specific root list, got {:?}", config.root_certs());
+        };
+        for der in &expected {
+            assert!(
+                roots.iter().any(|certificate| certificate.der() == der.as_slice()),
+                "a truststore certificate is missing from the TLS config"
+            );
+        }
+    }
+
+    /// The load-bearing assumption in `tls_config`: that `PrivateKey::from_pem` accepts the
+    /// `PRIVATE KEY` (PKCS#8) label the `pem()` helper emits for a key that started as DER. A wrong
+    /// label or a broken conversion would surface here instead of only against a real mutual-TLS
+    /// server.
+    #[test]
+    fn tls_config_round_trips_a_generated_keystore_through_pem() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("keystore.p12");
+        let (bytes, cert_der, key_der) = crate::tls::tests::keystore("changeit");
+        std::fs::write(&path, &bytes).unwrap();
+        let properties: Properties = [
+            (USER_HOME.to_string(), home.path().display().to_string()),
+            (crate::tls::KEYSTORE_PATH.to_string(), path.display().to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let config = tls_config(&properties).expect("a generated keystore must build a TLS config");
+
+        let client_cert = config.client_cert().expect("a keystore must produce a client certificate");
+        assert_eq!(client_cert.certs().first().map(Certificate::der), Some(cert_der.as_slice()));
+        assert_eq!(
+            client_cert.private_key().der(),
+            key_der.as_slice(),
+            "the key must survive the DER-to-PEM-to-DER round trip through native-tls's PKCS#8 label"
+        );
     }
 
     fn unauthorized(client: &HttpClient) -> String {

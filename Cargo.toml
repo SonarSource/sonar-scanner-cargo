@@ -46,6 +46,10 @@ path = "src/main.rs"
 vendored-openssl = ["dep:openssl"]
 
 [dependencies]
+# Only to PEM-encode the client key from the keystore. `ureq` takes the key as DER too, but the
+# `KeyKind` that constructor needs is not re-exported, so PEM is the only reachable route. See
+# src/http.rs.
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
@@ -53,6 +57,14 @@ dirs = "6"
 # toolchain per target.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 log = "0.4"
+# Reads `sonar.scanner.truststorePath` and `keystorePath`, which the bootstrapping contract requires
+# the bootstrapper to honour for its own calls, not merely forward. Pure Rust, so it costs the
+# cross-compiled targets nothing.
+p12-keystore = "0.3"
+# A truststore is additive — "in addition to OS + built-in certificates" — but `ureq` cannot express
+# "the platform verifier and also these": naming roots turns the built-in ones off. So the platform's
+# roots are enumerated here and passed alongside the truststore's. See src/tls.rs.
+rustls-native-certs = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
@@ -81,3 +93,9 @@ openssl = { version = "0.10", features = ["vendored"], optional = true }
 
 [profile.release]
 strip = true
+
+[dev-dependencies]
+# Generates a throwaway certificate and key per test, so most PKCS#12 fixtures are built at run time
+# rather than committed with a private key in a public repository. One certificate-only truststore
+# is committed deliberately instead — see tests/fixtures/README.md for why.
+rcgen = "0.14"

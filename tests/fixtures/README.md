@@ -24,3 +24,19 @@ Note for whoever picks up SCANCARGO-6: explicit configuration always beats deriv
 so a fixture carrying `[package.metadata.sonar]` masks auto-configuration and cannot be used to test
 it. Unconfigured variants will be needed. They are not added here because this ticket's
 base-directory assertion depends on those tables being present.
+
+## `ssl/`
+
+Not a Cargo project: `openssl-truststore.p12` is a PKCS#12 truststore for the `src/tls.rs` tests,
+holding one certificate and **no private key**.
+
+It is committed rather than generated because `p12-keystore`'s writer stamps every certificate bag
+with Java's Oracle trusted-key-usage attribute, so it cannot produce the file `openssl pkcs12 -export
+-nokeys` produces — which is exactly the shape that once parsed into zero certificates. The
+certificate is valid for a hundred years, so the fixture does not expire. Regenerate with:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout ca.key -out ca.crt -days 36500 -nodes \
+  -subj "/CN=Example Corporate Root CA"
+openssl pkcs12 -export -nokeys -in ca.crt -out openssl-truststore.p12 -passout pass:changeit
+```
