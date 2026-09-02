@@ -283,7 +283,7 @@ fn open(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn properties(pairs: &[(&str, &str)]) -> Properties {
@@ -329,7 +329,7 @@ mod tests {
     }
 
     /// A PKCS#12 file holding only certificates — a truststore, as `keytool -importcert` writes one.
-    fn truststore(password: &str, count: usize) -> (Vec<u8>, Vec<Vec<u8>>) {
+    pub(crate) fn truststore(password: &str, count: usize) -> (Vec<u8>, Vec<Vec<u8>>) {
         let mut store = KeyStore::new();
         let mut ders = Vec::new();
         for index in 0..count {
@@ -345,7 +345,7 @@ mod tests {
     }
 
     /// A PKCS#12 file holding a private key and its certificate — a keystore.
-    fn keystore(password: &str) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    pub(crate) fn keystore(password: &str) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         let issued = rcgen::generate_simple_self_signed(vec!["client.example".to_string()]).unwrap();
         let cert_der = issued.cert.der().to_vec();
         let key_der = issued.signing_key.serialize_der();

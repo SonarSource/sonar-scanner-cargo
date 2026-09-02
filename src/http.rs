@@ -865,6 +865,62 @@ mod tests {
         assert!(configured_proxy(&Properties::new()).unwrap().is_none(), "no proxy host means no explicit proxy");
     }
 
+    /// The counterpart of `crate::tls`'s own tests: those stop at `Stores`, so nothing had exercised
+    /// `Certificate::from_der(..).to_owned()` feeding `RootCerts::from` until this test.
+    #[test]
+    fn tls_config_trusts_a_generated_truststore() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("truststore.p12");
+        let (bytes, expected) = crate::tls::tests::truststore("changeit", 2);
+        std::fs::write(&path, &bytes).unwrap();
+        let properties: Properties = [
+            (USER_HOME.to_string(), home.path().display().to_string()),
+            (crate::tls::TRUSTSTORE_PATH.to_string(), path.display().to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let config = tls_config(&properties).expect("a generated truststore must build a TLS config");
+
+        let RootCerts::Specific(roots) = config.root_certs() else {
+            panic!("a configured truststore must produce a specific root list, got {:?}", config.root_certs());
+        };
+        for der in &expected {
+            assert!(
+                roots.iter().any(|certificate| certificate.der() == der.as_slice()),
+                "a truststore certificate is missing from the TLS config"
+            );
+        }
+    }
+
+    /// The load-bearing assumption in `tls_config`: that `PrivateKey::from_pem` accepts the
+    /// `PRIVATE KEY` (PKCS#8) label the `pem()` helper emits for a key that started as DER. A wrong
+    /// label or a broken conversion would surface here instead of only against a real mutual-TLS
+    /// server.
+    #[test]
+    fn tls_config_round_trips_a_generated_keystore_through_pem() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("keystore.p12");
+        let (bytes, cert_der, key_der) = crate::tls::tests::keystore("changeit");
+        std::fs::write(&path, &bytes).unwrap();
+        let properties: Properties = [
+            (USER_HOME.to_string(), home.path().display().to_string()),
+            (crate::tls::KEYSTORE_PATH.to_string(), path.display().to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let config = tls_config(&properties).expect("a generated keystore must build a TLS config");
+
+        let client_cert = config.client_cert().expect("a keystore must produce a client certificate");
+        assert_eq!(client_cert.certs().first().map(Certificate::der), Some(cert_der.as_slice()));
+        assert_eq!(
+            client_cert.private_key().der(),
+            key_der.as_slice(),
+            "the key must survive the DER-to-PEM-to-DER round trip through native-tls's PKCS#8 label"
+        );
+    }
+
     fn unauthorized(client: &HttpClient) -> String {
         message(client, 401)
     }
