@@ -95,7 +95,7 @@ openssl = { version = "0.10", features = ["vendored"], optional = true }
 strip = true
 
 [dev-dependencies]
-# Generates a throwaway certificate and key per test, so the PKCS#12 fixtures are built at run time.
-# A committed .p12 would mean a private key in a public repository, and would need openssl on the
-# machine to regenerate.
+# Generates a throwaway certificate and key per test, so most PKCS#12 fixtures are built at run time
+# rather than committed with a private key in a public repository. One certificate-only truststore
+# is committed deliberately instead — see tests/fixtures/README.md for why.
 rcgen = "0.14"
