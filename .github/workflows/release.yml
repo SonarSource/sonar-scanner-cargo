@@ -9,14 +9,15 @@ on:
         required: true
         type: string
       publishToCratesIo:
-        description: 'Publish the crate to crates.io. IRREVERSIBLE — a published version can never be
-          replaced or removed, only yanked. Off for the first release, which goes to Repox only.'
+        description: 'Run the crates.io job. IRREVERSIBLE unless dryRun is also on — a published
+          version can never be replaced or removed, only yanked.'
         required: false
         type: boolean
         default: false
       dryRun:
         description: 'Rehearse without releasing. Skips releasability, the promotion and the GitHub
-          release; the crates.io job still runs, as `cargo publish --dry-run`.'
+          release. The crates.io job is still gated on publishToCratesIo: set both to true to
+          rehearse the publish as `cargo publish --dry-run`.'
         required: false
         type: boolean
         default: false
@@ -26,8 +27,9 @@ on:
 # promotes it to `-releases`, so only a version a master build produced can be released.
 #
 # Two destinations, deliberately decoupled. Repox is the promotion and is repeatable. crates.io is
-# public and immutable, so it is opt-in per run: leave `publishToCratesIo` off until a `dryRun: true`
-# rehearsal of the same version has passed.
+# public and immutable, so it is opt-in per run. Rehearse it with `publishToCratesIo: true` *and*
+# `dryRun: true` — the crates.io job is gated on the publish flag alone, so `dryRun` on its own
+# skips it entirely and rehearses nothing.
 jobs:
   release:
     permissions:
