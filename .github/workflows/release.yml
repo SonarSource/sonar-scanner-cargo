@@ -9,15 +9,15 @@ on:
         required: true
         type: string
       publishToCratesIo:
-        description: 'Run the crates.io job. IRREVERSIBLE unless dryRun is also on — a published
-          version can never be replaced or removed, only yanked.'
+        description: 'Actually publish the crate to crates.io. IRREVERSIBLE — a published version can
+          never be replaced or removed, only yanked. Has no effect when dryRun is on.'
         required: false
         type: boolean
         default: false
       dryRun:
         description: 'Rehearse without releasing. Skips releasability, the promotion and the GitHub
-          release. The crates.io job is still gated on publishToCratesIo: set both to true to
-          rehearse the publish as `cargo publish --dry-run`.'
+          release, and always runs the crates.io job as `cargo publish --dry-run` — no flag to
+          remember, and nothing is uploaded.'
         required: false
         type: boolean
         default: false
@@ -27,9 +27,8 @@ on:
 # promotes it to `-releases`, so only a version a master build produced can be released.
 #
 # Two destinations, deliberately decoupled. Repox is the promotion and is repeatable. crates.io is
-# public and immutable, so it is opt-in per run. Rehearse it with `publishToCratesIo: true` *and*
-# `dryRun: true` — the crates.io job is gated on the publish flag alone, so `dryRun` on its own
-# skips it entirely and rehearses nothing.
+# public and immutable, so the real publish is opt-in per run — but a rehearsal of it is not, see
+# the pass-through below.
 jobs:
   release:
     permissions:
@@ -40,5 +39,11 @@ jobs:
     uses: SonarSource/gh-action_release/.github/workflows/main.yaml@fe21ded32d0763fdb77a13be883532706476296c
     with:
       version: ${{ inputs.version }}
-      publishToCratesIo: ${{ inputs.publishToCratesIo }}
+      # A dry run always exercises the crates.io job, whatever the publish flag says. The job is
+      # gated upstream on publishToCratesIo alone, so passing the operator's flag through unchanged
+      # would make `dryRun: true, publishToCratesIo: false` skip it and rehearse nothing — a green
+      # run that proves the one irreversible step was never tried. Under dryRun the job runs as
+      # `cargo publish --dry-run`, which fetches no crates.io token and uploads nothing, so turning
+      # it on here costs only runner time.
+      publishToCratesIo: ${{ inputs.publishToCratesIo || inputs.dryRun }}
       dryRun: ${{ inputs.dryRun }}
