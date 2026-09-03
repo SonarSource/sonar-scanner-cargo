@@ -1,12 +1,15 @@
 [package]
 name = "cargo-sonar-scanner"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Verified by CI, not asserted: `let` chains put the floor at 1.88.
 rust-version = "1.88"
 description = "Run SonarQube Server and SonarQube Cloud analysis from Cargo."
-# Sonar Source-Available License v1.0 — not an SPDX identifier, so the text ships with the crate.
-license-file = "LICENSE.txt"
+# An SPDX expression rather than `license-file`, so that crates.io, docs.rs and every license
+# scanner downstream can read it without a human in the loop — which is the point of the move away
+# from the Sonar Source-Available License. `-only`, not `-or-later`: the per-file headers grant
+# version 3 and no other, and the two have to say the same thing.
+license = "LGPL-3.0-only"
 readme = "README.md"
 repository = "https://github.com/SonarSource/sonar-scanner-cargo"
 documentation = "https://docs.rs/cargo-sonar-scanner"
@@ -23,6 +26,9 @@ include = [
     "/Cargo.toml",
     "/README.md",
     "/LICENSE.txt",
+    # The LGPL is additional permissions on top of the GPL, not a standalone licence: its own text
+    # requires a distributor to accompany it with a copy of the GNU GPL.
+    "/COPYING.GPL-3.0.txt",
     "/NOTICE.txt",
     "/rust-toolchain.toml",
     "/rustfmt.toml",

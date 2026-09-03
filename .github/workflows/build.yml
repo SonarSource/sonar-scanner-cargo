@@ -97,10 +97,28 @@ jobs:
 
       - name: Check the license headers
         run: |
-          missing=$(grep -rL 'Sonar Source-Available License Version 1' --include='*.rs' src tests || true)
+          # The version-3-only wording, not merely "LGPL": the `or (at your option) any later
+          # version` variant is a different licence from the `LGPL-3.0-only` Cargo.toml declares, and
+          # it is the wording most likely to arrive by copy-paste from another SonarSource project.
+          #
+          # license-header.txt is in scope on both checks below, alongside the .rs files: it is the
+          # template new files are copied from, and README.md points contributors at it directly, so
+          # it drifting out of sync with `LGPL-3.0-only` is exactly the failure mode these exist for.
+          missing=$(grep -rL 'License version 3 as published by the Free Software Foundation' --include='*.rs' src tests license-header.txt || true)
           if [[ -n "$missing" ]]; then
             echo "::error::Missing the license-header.txt header:"
             echo "$missing"
+            exit 1
+          fi
+          # Presence of the version-3 wording above does not rule out an *additional* "or later
+          # version" clause tacked on by a copy-paste from an -or-later header — check for that
+          # phrasing separately, since it grants more than Cargo.toml declares. Matched on "any
+          # later" rather than the full "any later version": the block comment can wrap between the
+          # two words, and grep only matches within one line.
+          later=$(grep -rl 'any later' --include='*.rs' src tests license-header.txt || true)
+          if [[ -n "$later" ]]; then
+            echo "::error::License header grants 'any later version', which contradicts LGPL-3.0-only:"
+            echo "$later"
             exit 1
           fi
 
@@ -262,7 +280,9 @@ jobs:
           [[ "${{ matrix.target }}" == *windows* ]] && suffix=".exe"
           mkdir -p "dist/$stage"
           cp "target/${{ matrix.target }}/release/cargo-sonar-scanner$suffix" "dist/$stage/"
-          cp LICENSE.txt NOTICE.txt README.md "dist/$stage/"
+          # COPYING.GPL-3.0.txt too: the LGPL in LICENSE.txt is additional permissions on top of the
+          # GPL, and its own text requires a distributor to accompany it with a copy of the GNU GPL.
+          cp LICENSE.txt COPYING.GPL-3.0.txt NOTICE.txt README.md "dist/$stage/"
           echo "STAGE=$stage" >> "$GITHUB_ENV"
 
       # Unversioned here: the deploy job owns the version, so that only one place derives it.

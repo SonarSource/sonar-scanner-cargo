@@ -480,10 +480,10 @@ publish path and it is the same one every other SonarSource artifact uses. Trust
 possible later simplification — `main.yaml` already has a `useNpmTrustedPublisher` input showing the pattern
 is being adopted registry by registry — but adopting it is not a prerequisite for the first release.
 
-**Gate before the first release:** the licence choice (`MIT OR Apache-2.0` is the Rust-ecosystem norm but is
-*not* a crates.io requirement, and this repo currently ships SSAL v1), the contributor-rights model, the
-required notices, and the public support expectations must all be settled and signed off. This is the one item
-in the plan that cannot be resolved by writing code.
+**Gate before the first release:** ~~the licence choice~~ (**settled**: legal approved `LGPL-3.0-only`, an
+SPDX identifier every downstream scanner can read, in place of SSAL v1 — see SCANCARGO-12), the
+contributor-rights model, the required notices, and the public support expectations must all be settled and
+signed off. This is the one item in the plan that cannot be resolved by writing code.
 
 ---
 
@@ -515,7 +515,7 @@ an existing artifact — the guidelines, a reference implementation, or the serv
 | OQ-1 | ~~Scanner identity~~ — **DECIDED: `sonar.scanner.app = "cargo"`**, per the guidelines' naming convention. (`ScannerCLI`/`ScannerMSBuild` are legacy spellings; pysonar already sends plain `"python"`.) Engine M0 hard-codes the identical string. Remaining action: announce the value before GA so telemetry dashboards and any server-side allow-lists learn it. | resolved |
 | OQ-2 | ~~**Configuration file names.**~~ **Settled by M1.** `sonar-project.properties` in the base dir and `<sonar.userHome>/sonar-scanner.properties`, both as proposed. The third part was decided the other way: `[package.metadata.sonar]` *is* read, and outranks `sonar-project.properties` — see M1's notes for why that does not reintroduce a split namespace. | resolved |
 | OQ-3 | ~~**Minimum supported server version.**~~ **DECIDED: 10.6**, implemented in `src/version.rs`. Verified against both reference implementations rather than assumed: the Java library's `SQ_VERSION_NEW_BOOTSTRAPPING` and pysonar's `MIN_SUPPORTED_SQ_VERSION` are both 10.6. Supporting LTS 9.9 would require the legacy classloader path, which we deliberately do not carry; an older server gets a message pointing at the SonarScanner CLI. | resolved |
-| OQ-5 | **Licensing and crates.io metadata.** The licence expression, contributor-rights model, required notices and public support expectations. The *publication pipeline* half of this question is answered: `sonartech` + Vault token + `gh-action_release`, see M5. What remains needs a licensing sign-off, which is not a technical decision. | M5 |
+| OQ-5 | **Licensing and crates.io metadata.** ~~The licence expression~~ (**settled**: `LGPL-3.0-only`, see SCANCARGO-12 and M5's gate), the contributor-rights model, required notices and public support expectations. The *publication pipeline* half of this question is answered: `sonartech` + Vault token + `gh-action_release`, see M5. What remains needs a licensing sign-off, which is not a technical decision. | M5 |
 | OQ-6 | ~~**Cross-origin redirect credential policy.**~~ **DECIDED: origin-scoped**, implemented in `src/http.rs`. The token is sent only to origins matching the resolved `sonar.host.url`/`sonar.scanner.apiBaseUrl`, so a redirect to a CDN carries no credential. Redirects are followed by our own code, one hop at a time, because `ureq`'s `SameHost` policy ignores the port and would leak the token across two origins on the same host. Asserted by tests against a real socket. | resolved |
 | OQ-7 | **Log format.** Match `sonar-scanner-cli`'s exact output shape (`INFO: …`) — verify against the CLI's real output before freezing, since users grep it in CI. | M3 |
 

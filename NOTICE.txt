@@ -4,8 +4,10 @@ mailto:info AT sonarsource DOT com
 This product includes software developed at
 SonarSource (https://sonarsource.com/).
 
-See LICENSE.txt file for details of the
-applicable license.
+Licensed under the GNU Lesser General Public
+License, version 3 only. See LICENSE.txt, and
+COPYING.GPL-3.0.txt for the GNU GPL terms the
+LGPL incorporates.
 
 For further legal information, see
 https://sonarsource.com/legal/
