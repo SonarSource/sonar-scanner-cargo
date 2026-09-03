@@ -410,6 +410,8 @@ jobs:
         with:
           secrets: |
             development/artifactory/token/{REPO_OWNER_NAME_DASH}-qa-deployer access_token | ARTIFACTORY_DEPLOY_TOKEN;
+            development/kv/data/sign key | GPG_SIGNING_KEY;
+            development/kv/data/sign passphrase | GPG_SIGNING_PASSPHRASE;
 
       # Only for resolving dependencies while packaging; the deploy goes through the JFrog CLI.
       - name: Route crates.io through Repox
@@ -445,6 +447,9 @@ jobs:
           # Reaches the build info via `jf rt build-collect-env` below, where the promotion and the
           # release read it back.
           echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
+          # The build number stripped back off, which is what crates.io publishes and therefore what
+          # `cargo binstall` templates as `{ version }`. Only the binstall check below needs it.
+          echo "RELEASE_VERSION=$release" >> "$GITHUB_ENV"
           echo "Building $BUILD_NAME/$BUILD_NUMBER as $version"
 
       # `--allow-dirty`: the stamp above edits the manifest. The verification build is kept — it is
@@ -466,6 +471,10 @@ jobs:
       - name: Name and checksum the binaries
         run: |
           cd binaries
+          # Every target the binaries job produced, as `<target> <ext>` pairs. The steps below derive
+          # what they publish from this rather than restating the matrix, so a target added there
+          # cannot be silently left out of a release.
+          : > "$RUNNER_TEMP/targets"
           for archive in *; do
             case "$archive" in
               cargo-sonar-scanner-*.tar.gz) target="${archive#cargo-sonar-scanner-}"; target="${target%.tar.gz}"; ext="tar.gz" ;;
@@ -473,6 +482,7 @@ jobs:
               *) echo "::error::unexpected artefact $archive"; exit 1 ;;
             esac
             mv "$archive" "cargo-sonar-scanner-${PROJECT_VERSION}-${target}.${ext}"
+            echo "$target $ext" >> "$RUNNER_TEMP/targets"
           done
           # Written outside the directory first: redirecting into it would have the shell create the
           # file before the glob expands, and the checksum list would contain itself.
@@ -481,6 +491,99 @@ jobs:
           # to apply to `<file>`, and rejects the upload because no such artefact exists.
           mv ../checksums "cargo-sonar-scanner-${PROJECT_VERSION}-checksums.txt"
           ls -l
+          # What the release publishes to binaries.sonarsource.com, as `groupId:artifactId:ext:qual`.
+          # gh-action_release reads it back off the build info as `buildInfo.env.ARTIFACTS_TO_PUBLISH`
+          # (BuildInfo.get_artifacts_to_publish) and rebuilds each filename from the four parts, which
+          # is why the naming above has to be `<artifactId>-<version>-<qual>.<ext>` exactly.
+          artifacts=()
+          while read -r target ext; do
+            artifacts+=("org.sonarsource.scanner.cargo:cargo-sonar-scanner:${ext}:${target}")
+          done < "$RUNNER_TEMP/targets"
+          printf 'ARTIFACTS_TO_PUBLISH=%s\n' "$(IFS=,; echo "${artifacts[*]}")" >> "$GITHUB_ENV"
+
+      # The archives and the binstall metadata have to agree on one URL, and nothing else forces them
+      # to: the names are built here, the template lives in Cargo.toml, and the path in between is
+      # gh-action_release's. Resolve the template the way `cargo binstall` will and compare, so that
+      # renaming an archive, adding a target without an override, or changing the layout fails the
+      # build rather than a user's install.
+      - name: Check the binstall metadata resolves to the published archives
+        run: |
+          # The `pkg-url` of one [package.metadata.binstall...] section, empty if there is no such
+          # section or it sets no pkg-url.
+          pkg_url() {
+            awk -v section="[$1]" '
+              $0 == section { inside = 1; next }
+              /^\[/ { inside = 0 }
+              inside && /^pkg-url = "/ { sub(/^pkg-url = "/, ""); sub(/"$/, ""); print; exit }
+            ' Cargo.toml
+          }
+          # The subset of binstall's template variables these URLs use. `{ version }` is the crate
+          # version, without the build number — crates.io never sees one — and `{ build }` is
+          # gh-action_release's own placeholder, substituted when the crate is published.
+          render() {
+            local out=$1
+            out=${out//\{ name \}/cargo-sonar-scanner}
+            out=${out//\{ version \}/$RELEASE_VERSION}
+            out=${out//\{ build \}/$BUILD_NUMBER}
+            out=${out//\{ target \}/$2}
+            printf '%s' "$out"
+          }
+          default=$(pkg_url package.metadata.binstall)
+          if [[ -z "$default" ]]; then
+            echo "::error::Cargo.toml has no [package.metadata.binstall] pkg-url"
+            exit 1
+          fi
+          failed=0
+          while read -r target ext; do
+            url=$(pkg_url "package.metadata.binstall.overrides.${target}")
+            resolved=$(render "${url:-$default}" "$target")
+            # Anything left over is a variable this check does not know how to resolve, which means
+            # it cannot vouch for the URL either way.
+            if [[ "$resolved" == *'{'* || "$resolved" == *'}'* ]]; then
+              echo "::error::unresolved placeholder in the $target pkg-url: $resolved"
+              failed=1
+              continue
+            fi
+            # Binaries.get_file_bucket_key: `Distribution/<artifactId>` for an org.sonarsource group
+            # id, flat, with the filename gh-action_release rebuilds from ARTIFACTS_TO_PUBLISH.
+            expected="https://binaries.sonarsource.com/Distribution/cargo-sonar-scanner/cargo-sonar-scanner-${PROJECT_VERSION}-${target}.${ext}"
+            if [[ "$resolved" != "$expected" ]]; then
+              echo "::error::binstall would fetch $target from"
+              echo "::error::  $resolved"
+              echo "::error::but the release publishes"
+              echo "::error::  $expected"
+              failed=1
+              continue
+            fi
+            echo "ok  $target -> $resolved"
+          done < "$RUNNER_TEMP/targets"
+          exit "$failed"
+
+      # gh-action_release fetches an `.asc` alongside every artefact it publishes to
+      # binaries.sonarsource.com and fails the release if one is missing — see
+      # Binaries.get_actual_checksums. The md5/sha1/sha256 siblings it also fetches are served
+      # virtually by Artifactory, so the signature is the only one that has to be uploaded.
+      #
+      # Here rather than in the binaries job because a signature is over bytes, not names, and the
+      # names are only settled above — one `.asc` per final artefact, from one implementation.
+      - name: Sign the binaries
+        env:
+          GPG_SIGNING_KEY: ${{ fromJSON(steps.secrets.outputs.vault).GPG_SIGNING_KEY }}
+          GPG_SIGNING_PASSPHRASE: ${{ fromJSON(steps.secrets.outputs.vault).GPG_SIGNING_PASSPHRASE }}
+        run: |
+          # A throwaway keyring, so the key never touches the runner's default GNUPGHOME.
+          GNUPGHOME=$(mktemp -d)
+          export GNUPGHOME
+          chmod 700 "$GNUPGHOME"
+          printf '%s\n' "$GPG_SIGNING_KEY" | gpg --batch --quiet --import
+          cd binaries
+          # Expanded once, before the loop body creates any `.asc`, so signatures are not signed.
+          for file in cargo-sonar-scanner-*; do
+            printf '%s' "$GPG_SIGNING_PASSPHRASE" | gpg --batch --quiet \
+              --pinentry-mode loopback --passphrase-fd 0 --detach-sign --armor "$file"
+            gpg --batch --quiet --verify "$file.asc" "$file"
+            echo "signed $file"
+          done
 
       - name: Deploy to Repox
         env:
@@ -522,10 +625,15 @@ jobs:
           # Same build info and the same module as the crate, so a release promotes the binaries with
           # it rather than leaving them behind in `-qa`. An upload without --module would register a
           # second module named after the build, and releasability would throw on that one instead.
-          # No index layout to respect here: unlike the crate, nothing resolves these by path.
+          #
+          # Maven layout, not because anything indexes it, but because it is the only shape the
+          # release can fetch from: Artifactory.download builds
+          # `<repo>/<groupId as path>/<artifactId>/<version>/<artifactId>-<version>-<qual>.<ext>`
+          # out of each ARTIFACTS_TO_PUBLISH entry, and 404s on anything else.
           jf rt upload --flat=true --fail-no-op \
             --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --module="$module" \
-            "binaries/*" "${ARTIFACTORY_DEPLOY_REPO}/binaries/cargo-sonar-scanner/${PROJECT_VERSION}/"
+            "binaries/*" \
+            "${ARTIFACTORY_DEPLOY_REPO}/org/sonarsource/scanner/cargo/cargo-sonar-scanner/${PROJECT_VERSION}/"
           jf rt build-collect-env "$BUILD_NAME" "$BUILD_NUMBER"
           jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER"
           jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
