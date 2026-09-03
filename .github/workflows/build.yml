@@ -503,8 +503,9 @@ jobs:
 
       # The archives and the binstall metadata have to agree on one URL, and nothing else forces them
       # to: the names are built here, the template lives in Cargo.toml, and the path in between is
-      # gh-action_release's. Resolve the template the way `cargo binstall` will and compare, so that
-      # renaming an archive, adding a target without an override, or changing the layout fails the
+      # gh-action_release's. Resolve the template the way `cargo binstall` will and compare, in both
+      # directions — every archive is reachable from the metadata, and every override names an
+      # archive — so that renaming one, adding or dropping a target, or changing the layout fails the
       # build rather than a user's install.
       - name: Check the binstall metadata resolves to the published archives
         run: |
@@ -604,6 +605,20 @@ jobs:
             fi
             echo "ok  $target -> $resolved ($fmt, $bin_dir)"
           done < "$RUNNER_TEMP/targets"
+          # The other direction. The loop above only visits targets the build produced, so an
+          # override left behind for a target dropped from the matrix is never resolved: binstall
+          # would send that platform to a URL nothing publishes and quietly fall back to compiling,
+          # which is the outcome the prebuilt binaries exist to avoid.
+          #
+          # Only bare triples are enumerated. binstall also accepts a quoted `cfg(...)` expression as
+          # an override key, which names no single target and could not be matched this way; none are
+          # used here, and one added later would be reported rather than silently ignored.
+          while read -r override; do
+            if ! cut -d' ' -f1 "$RUNNER_TEMP/targets" | grep -qxF "$override"; then
+              echo "::error::Cargo.toml has a binstall override for $override, which the binaries job does not build"
+              failed=1
+            fi
+          done < <(sed -n 's/^\[package\.metadata\.binstall\.overrides\.\([^]"]*\)\]$/\1/p' Cargo.toml)
           exit "$failed"
 
       # gh-action_release fetches an `.asc` alongside every artefact it publishes to
