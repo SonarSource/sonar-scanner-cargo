@@ -1,5 +1,6 @@
 /target
 /.cargo/config.toml
+/.idea/
 # Written by CI to provision the JFrog CLI.
 /mise.local.toml
 # Left in an analysed project by an end-to-end run: the scanner writes its working directory, and

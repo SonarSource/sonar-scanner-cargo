@@ -26,6 +26,9 @@ include = [
     "/Cargo.toml",
     "/README.md",
     "/LICENSE.txt",
+    # The LGPL is additional permissions on top of the GPL, not a standalone licence: its own text
+    # requires a distributor to accompany it with a copy of the GNU GPL.
+    "/COPYING.GPL-3.0.txt",
     "/NOTICE.txt",
     "/rust-toolchain.toml",
     "/rustfmt.toml",

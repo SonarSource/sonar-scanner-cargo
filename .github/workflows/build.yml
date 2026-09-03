@@ -265,7 +265,9 @@ jobs:
           [[ "${{ matrix.target }}" == *windows* ]] && suffix=".exe"
           mkdir -p "dist/$stage"
           cp "target/${{ matrix.target }}/release/cargo-sonar-scanner$suffix" "dist/$stage/"
-          cp LICENSE.txt NOTICE.txt README.md "dist/$stage/"
+          # COPYING.GPL-3.0.txt too: the LGPL in LICENSE.txt is additional permissions on top of the
+          # GPL, and its own text requires a distributor to accompany it with a copy of the GNU GPL.
+          cp LICENSE.txt COPYING.GPL-3.0.txt NOTICE.txt README.md "dist/$stage/"
           echo "STAGE=$stage" >> "$GITHUB_ENV"
 
       # Unversioned here: the deploy job owns the version, so that only one place derives it.
