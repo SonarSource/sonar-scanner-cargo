@@ -102,13 +102,17 @@ done < "$RUNNER_TEMP/targets"
 # would send that platform to a URL nothing publishes and quietly fall back to compiling,
 # which is the outcome the prebuilt binaries exist to avoid.
 #
-# Only bare triples are enumerated. binstall also accepts a quoted `cfg(...)` expression as
-# an override key, which names no single target and could not be matched this way; none are
-# used here, and one added later would be reported rather than silently ignored.
+# Every override key is enumerated, quoted or not — TOML allows either `'` or `"` around a key
+# that needs quoting, and binstall treats both the same. A quoted `cfg(...)` predicate is then
+# skipped rather than compared: it names no single target, so it cannot be checked against the
+# flat target list the way a bare triple can, and treating it as one would misreport it as an
+# override for a target the binaries job does not build.
 while read -r override; do
+  [[ "$override" == 'cfg('* ]] && continue
   if ! cut -d' ' -f1 "$RUNNER_TEMP/targets" | grep -qxF "$override"; then
     echo "::error::Cargo.toml has a binstall override for $override, which the binaries job does not build"
     failed=1
   fi
-done < <(sed -n 's/^\[package\.metadata\.binstall\.overrides\.\([^]"]*\)\]$/\1/p' Cargo.toml)
+done < <(sed -n 's/^\[package\.metadata\.binstall\.overrides\.\(.*\)\]$/\1/p' Cargo.toml \
+           | sed -e "s/^['\"]//" -e "s/['\"]\$//")
 exit "$failed"
