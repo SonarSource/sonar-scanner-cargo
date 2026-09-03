@@ -106,6 +106,15 @@ jobs:
             echo "$missing"
             exit 1
           fi
+          # Presence of the version-3 wording above does not rule out an *additional* "or later
+          # version" clause tacked on by a copy-paste from an -or-later header — check for that
+          # phrasing separately, since it grants more than Cargo.toml declares.
+          later=$(grep -rl 'any later version' --include='*.rs' src tests || true)
+          if [[ -n "$later" ]]; then
+            echo "::error::License header grants 'any later version', which contradicts LGPL-3.0-only:"
+            echo "$later"
+            exit 1
+          fi
 
       - name: Lint
         env:
