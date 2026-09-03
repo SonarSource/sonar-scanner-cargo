@@ -331,5 +331,10 @@ it.
 ## License
 
 Copyright (C) SonarSource Sàrl. Licensed under the
-[Sonar Source-Available License v1.0](LICENSE.txt), the same license as
-[sonar-rust](https://github.com/SonarSource/sonar-rust). See also [NOTICE.txt](NOTICE.txt).
+[GNU Lesser General Public License, version 3](LICENSE.txt) (`LGPL-3.0-only`) — the same license as
+[SonarScanner CLI](https://github.com/SonarSource/sonar-scanner-cli). See also
+[NOTICE.txt](NOTICE.txt).
+
+The bootstrapper is licensed independently of what it downloads and runs: the scanner engine and the
+analyzers it provisions at run time carry their own licenses, as does
+[sonar-rust](https://github.com/SonarSource/sonar-rust).

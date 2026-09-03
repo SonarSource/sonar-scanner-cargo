@@ -480,10 +480,10 @@ publish path and it is the same one every other SonarSource artifact uses. Trust
 possible later simplification — `main.yaml` already has a `useNpmTrustedPublisher` input showing the pattern
 is being adopted registry by registry — but adopting it is not a prerequisite for the first release.
 
-**Gate before the first release:** the licence choice (`MIT OR Apache-2.0` is the Rust-ecosystem norm but is
-*not* a crates.io requirement, and this repo currently ships SSAL v1), the contributor-rights model, the
-required notices, and the public support expectations must all be settled and signed off. This is the one item
-in the plan that cannot be resolved by writing code.
+**Gate before the first release:** ~~the licence choice~~ (**settled**: legal approved `LGPL-3.0-only`, an
+SPDX identifier every downstream scanner can read, in place of SSAL v1 — see SCANCARGO-12), the
+contributor-rights model, the required notices, and the public support expectations must all be settled and
+signed off. This is the one item in the plan that cannot be resolved by writing code.
 
 ---
 

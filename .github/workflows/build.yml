@@ -97,7 +97,10 @@ jobs:
 
       - name: Check the license headers
         run: |
-          missing=$(grep -rL 'Sonar Source-Available License Version 1' --include='*.rs' src tests || true)
+          # The version-3-only wording, not merely "LGPL": the `or (at your option) any later
+          # version` variant is a different licence from the `LGPL-3.0-only` Cargo.toml declares, and
+          # it is the wording most likely to arrive by copy-paste from another SonarSource project.
+          missing=$(grep -rL 'License version 3 as published by the Free Software Foundation' --include='*.rs' src tests || true)
           if [[ -n "$missing" ]]; then
             echo "::error::Missing the license-header.txt header:"
             echo "$missing"
