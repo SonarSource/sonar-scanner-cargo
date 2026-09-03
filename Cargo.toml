@@ -1,6 +1,6 @@
 [package]
 name = "cargo-sonar-scanner"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Verified by CI, not asserted: `let` chains put the floor at 1.88.
 rust-version = "1.88"
