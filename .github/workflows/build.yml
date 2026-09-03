@@ -73,24 +73,8 @@ jobs:
           secrets: |
             development/artifactory/token/{REPO_OWNER_NAME_DASH}-public-reader access_token | ARTIFACTORY_ACCESS_TOKEN;
 
-      # Dependencies resolve through Repox rather than crates.io directly. This file is generated
-      # here and never committed: committing it would break external contributors, who have no
-      # Repox credentials.
       - name: Route crates.io through Repox
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [registry]
-          # Repox requires authentication, and Cargo refuses to talk to an authenticated registry
-          # without an explicit credential provider. The token comes from the environment.
-          global-credential-providers = ["cargo:token"]
-
-          [registries.repox]
-          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
-
-          [source.crates-io]
-          replace-with = "repox"
-          EOF
+        run: .github/scripts/route-crates-io-through-repox.sh
 
       - name: Check the formatting
         run: cargo fmt --all --check
@@ -238,18 +222,7 @@ jobs:
 
       - name: Route crates.io through Repox
         shell: bash
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [registry]
-          global-credential-providers = ["cargo:token"]
-
-          [registries.repox]
-          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
-
-          [source.crates-io]
-          replace-with = "repox"
-          EOF
+        run: .github/scripts/route-crates-io-through-repox.sh
 
       # Only Linux needs `vendored-openssl`: it is the one target family whose `native-tls` has a
       # library to compile. Windows links SChannel, whose import libraries zig ships.
@@ -415,42 +388,12 @@ jobs:
 
       # Only for resolving dependencies while packaging; the deploy goes through the JFrog CLI.
       - name: Route crates.io through Repox
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [registry]
-          global-credential-providers = ["cargo:token"]
-
-          [registries.repox]
-          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
-
-          [source.crates-io]
-          replace-with = "repox"
-          EOF
+        run: .github/scripts/route-crates-io-through-repox.sh
 
       # Cargo has no flag for a build number, and `--locked` compares the manifest version against
       # Cargo.lock, so both files move together.
       - name: Stamp the build version
-        run: |
-          release=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
-          if [[ -z "$release" ]]; then
-            echo "::error::Cargo.toml declares no version"
-            exit 1
-          fi
-          version="${release}-${BUILD_NUMBER}"
-          # The package's own version only: the first in Cargo.toml, the line after its name in
-          # Cargo.lock. Dependency versions are left be.
-          awk -v v="$version" '!done && /^version = /{print "version = \"" v "\""; done=1; next} {print}' \
-            Cargo.toml > Cargo.toml.stamped && mv Cargo.toml.stamped Cargo.toml
-          awk -v v="$version" '/^name = "cargo-sonar-scanner"$/{print; getline; print "version = \"" v "\""; next} {print}' \
-            Cargo.lock > Cargo.lock.stamped && mv Cargo.lock.stamped Cargo.lock
-          # Reaches the build info via `jf rt build-collect-env` below, where the promotion and the
-          # release read it back.
-          echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
-          # The build number stripped back off, which is what crates.io publishes and therefore what
-          # `cargo binstall` templates as `{ version }`. Only the binstall check below needs it.
-          echo "RELEASE_VERSION=$release" >> "$GITHUB_ENV"
-          echo "Building $BUILD_NAME/$BUILD_NUMBER as $version"
+        run: .github/scripts/stamp-build-version.sh
 
       # `--allow-dirty`: the stamp above edits the manifest. The verification build is kept — it is
       # the last check that the packaged crate compiles on its own.
@@ -469,37 +412,7 @@ jobs:
       # Named with the version only now, so the binaries job never has to derive one. The checksum
       # is generated here rather than per-runner so that all of them come from one implementation.
       - name: Name and checksum the binaries
-        run: |
-          cd binaries
-          # Every target the binaries job produced, as `<target> <ext>` pairs. The steps below derive
-          # what they publish from this rather than restating the matrix, so a target added there
-          # cannot be silently left out of a release.
-          : > "$RUNNER_TEMP/targets"
-          for archive in *; do
-            case "$archive" in
-              cargo-sonar-scanner-*.tar.gz) target="${archive#cargo-sonar-scanner-}"; target="${target%.tar.gz}"; ext="tar.gz" ;;
-              cargo-sonar-scanner-*.zip)    target="${archive#cargo-sonar-scanner-}"; target="${target%.zip}";    ext="zip" ;;
-              *) echo "::error::unexpected artefact $archive"; exit 1 ;;
-            esac
-            mv "$archive" "cargo-sonar-scanner-${PROJECT_VERSION}-${target}.${ext}"
-            echo "$target $ext" >> "$RUNNER_TEMP/targets"
-          done
-          # Written outside the directory first: redirecting into it would have the shell create the
-          # file before the glob expands, and the checksum list would contain itself.
-          sha256sum cargo-sonar-scanner-* > ../checksums
-          # Deliberately not `.sha256`: Artifactory reads an uploaded `<file>.sha256` as a checksum
-          # to apply to `<file>`, and rejects the upload because no such artefact exists.
-          mv ../checksums "cargo-sonar-scanner-${PROJECT_VERSION}-checksums.txt"
-          ls -l
-          # What the release publishes to binaries.sonarsource.com, as `groupId:artifactId:ext:qual`.
-          # gh-action_release reads it back off the build info as `buildInfo.env.ARTIFACTS_TO_PUBLISH`
-          # (BuildInfo.get_artifacts_to_publish) and rebuilds each filename from the four parts, which
-          # is why the naming above has to be `<artifactId>-<version>-<qual>.<ext>` exactly.
-          artifacts=()
-          while read -r target ext; do
-            artifacts+=("org.sonarsource.scanner.cargo:cargo-sonar-scanner:${ext}:${target}")
-          done < "$RUNNER_TEMP/targets"
-          printf 'ARTIFACTS_TO_PUBLISH=%s\n' "$(IFS=,; echo "${artifacts[*]}")" >> "$GITHUB_ENV"
+        run: .github/scripts/name-and-checksum-binaries.sh
 
       # The archives and the binstall metadata have to agree on one URL, and nothing else forces them
       # to: the names are built here, the template lives in Cargo.toml, and the path in between is
@@ -508,118 +421,7 @@ jobs:
       # archive — so that renaming one, adding or dropping a target, or changing the layout fails the
       # build rather than a user's install.
       - name: Check the binstall metadata resolves to the published archives
-        run: |
-          # One `key = "value"` out of one [package.metadata.binstall...] section, empty if either
-          # the section or the key is absent.
-          toml_value() {
-            awk -v section="[$1]" -v key="$2" '
-              $0 == section { inside = 1; next }
-              /^\[/ { inside = 0 }
-              inside && index($0, key " = \"") == 1 {
-                sub("^" key " = \"", ""); sub(/"$/, ""); print; exit
-              }
-            ' Cargo.toml
-          }
-          # The value binstall will use for a target: its override if it has one, else the default.
-          setting() {
-            local override
-            override=$(toml_value "package.metadata.binstall.overrides.$1" "$2")
-            printf '%s' "${override:-$(toml_value package.metadata.binstall "$2")}"
-          }
-          # The subset of binstall's template variables these URLs use. `{ version }` is the crate
-          # version, without the build number — crates.io never sees one — and `{ build }` is
-          # gh-action_release's own placeholder, substituted when the crate is published.
-          render() {
-            local out=$1 ext=""
-            [[ "$2" == *windows* ]] && ext=".exe"
-            out=${out//\{ name \}/cargo-sonar-scanner}
-            out=${out//\{ bin \}/cargo-sonar-scanner}
-            out=${out//\{ version \}/$RELEASE_VERSION}
-            out=${out//\{ build \}/$BUILD_NUMBER}
-            out=${out//\{ target \}/$2}
-            out=${out//\{ binary-ext \}/$ext}
-            printf '%s' "$out"
-          }
-          if [[ -z "$(toml_value package.metadata.binstall pkg-url)" ]]; then
-            echo "::error::Cargo.toml has no [package.metadata.binstall] pkg-url"
-            exit 1
-          fi
-          failed=0
-          while read -r target ext; do
-            resolved=$(render "$(setting "$target" pkg-url)" "$target")
-            # Anything left over is a variable this check does not know how to resolve, which means
-            # it cannot vouch for the URL either way.
-            if [[ "$resolved" == *'{'* || "$resolved" == *'}'* ]]; then
-              echo "::error::unresolved placeholder in the $target pkg-url: $resolved"
-              failed=1
-              continue
-            fi
-            # Binaries.get_file_bucket_key: `Distribution/<artifactId>` for an org.sonarsource group
-            # id, flat, with the filename gh-action_release rebuilds from ARTIFACTS_TO_PUBLISH.
-            expected="https://binaries.sonarsource.com/Distribution/cargo-sonar-scanner/cargo-sonar-scanner-${PROJECT_VERSION}-${target}.${ext}"
-            if [[ "$resolved" != "$expected" ]]; then
-              echo "::error::binstall would fetch $target from"
-              echo "::error::  $resolved"
-              echo "::error::but the release publishes"
-              echo "::error::  $expected"
-              failed=1
-              continue
-            fi
-            # `pkg-fmt` decides how binstall unpacks what it downloaded, independently of the URL, so
-            # a `.zip` served to a `tgz` reader is a well-formed URL that fails at extraction.
-            case "$ext" in
-              tar.gz) want_fmt=tgz ;;
-              zip)    want_fmt=zip ;;
-              *) echo "::error::no pkg-fmt known for a .$ext archive"; failed=1; continue ;;
-            esac
-            fmt=$(setting "$target" pkg-fmt)
-            if [[ "$fmt" != "$want_fmt" ]]; then
-              echo "::error::$target ships a .$ext but its pkg-fmt is '${fmt:-unset}', expected '$want_fmt'"
-              failed=1
-              continue
-            fi
-            # `bin-dir` is where binstall looks *inside* the archive. Resolve it and check the entry
-            # is really there, rather than trusting that the template still matches the layout the
-            # binaries job stages — the archive is right here, so ask it.
-            bin_dir=$(render "$(setting "$target" bin-dir)" "$target")
-            archive="binaries/cargo-sonar-scanner-${PROJECT_VERSION}-${target}.${ext}"
-            # Same fallback as the Pack (zip) step: a minimal runner has neither zip nor unzip.
-            if [[ "$ext" == zip ]]; then
-              if command -v unzip > /dev/null; then
-                contents=$(unzip -Z1 "$archive")
-              elif command -v python3 > /dev/null; then
-                contents=$(python3 -c 'import sys,zipfile;print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))' "$archive")
-              else
-                echo "::error::neither unzip nor python3 is available to list $archive"
-                failed=1
-                continue
-              fi
-            else
-              contents=$(tar -tzf "$archive")
-            fi
-            if ! grep -qxF "$bin_dir" <<< "$contents"; then
-              echo "::error::binstall would look for '$bin_dir' inside $archive, which contains:"
-              while IFS= read -r entry; do echo "::error::  $entry"; done <<< "$contents"
-              failed=1
-              continue
-            fi
-            echo "ok  $target -> $resolved ($fmt, $bin_dir)"
-          done < "$RUNNER_TEMP/targets"
-          # The other direction. The loop above only visits targets the build produced, so an
-          # override left behind for a target dropped from the matrix is never resolved: binstall
-          # would send that platform to a URL nothing publishes and quietly fall back to compiling,
-          # which is the outcome the prebuilt binaries exist to avoid.
-          #
-          # Only bare triples are enumerated. binstall also accepts a quoted `cfg(...)` expression as
-          # an override key, which names no single target and could not be matched this way; none are
-          # used here, and one added later would be reported rather than silently ignored.
-          while read -r override; do
-            if ! cut -d' ' -f1 "$RUNNER_TEMP/targets" | grep -qxF "$override"; then
-              echo "::error::Cargo.toml has a binstall override for $override, which the binaries job does not build"
-              failed=1
-            fi
-          done < <(sed -n 's/^\[package\.metadata\.binstall\.overrides\.\([^]"]*\)\]$/\1/p' Cargo.toml)
-          exit "$failed"
+        run: .github/scripts/check-binstall-metadata.sh
 
       # gh-action_release fetches an `.asc` alongside every artefact it publishes to
       # binaries.sonarsource.com and fails the release if one is missing — see
@@ -632,73 +434,12 @@ jobs:
         env:
           GPG_SIGNING_KEY: ${{ fromJSON(steps.secrets.outputs.vault).GPG_SIGNING_KEY }}
           GPG_SIGNING_PASSPHRASE: ${{ fromJSON(steps.secrets.outputs.vault).GPG_SIGNING_PASSPHRASE }}
-        run: |
-          # A throwaway keyring, so the key never touches the runner's default GNUPGHOME.
-          GNUPGHOME=$(mktemp -d)
-          export GNUPGHOME
-          chmod 700 "$GNUPGHOME"
-          printf '%s\n' "$GPG_SIGNING_KEY" | gpg --batch --quiet --import
-          cd binaries
-          # Expanded once, before the loop body creates any `.asc`, so signatures are not signed.
-          for file in cargo-sonar-scanner-*; do
-            printf '%s' "$GPG_SIGNING_PASSPHRASE" | gpg --batch --quiet \
-              --pinentry-mode loopback --passphrase-fd 0 --detach-sign --armor "$file"
-            gpg --batch --quiet --verify "$file.asc" "$file"
-            echo "signed $file"
-          done
+        run: .github/scripts/sign-binaries.sh
 
       - name: Deploy to Repox
         env:
           ARTIFACTORY_DEPLOY_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
-        run: |
-          jf config remove repox > /dev/null 2>&1 || true
-          jf config add repox \
-            --url https://repox.jfrog.io \
-            --artifactory-url https://repox.jfrog.io/artifactory \
-            --access-token "$ARTIFACTORY_DEPLOY_TOKEN"
-          jf config use repox
-          crate="cargo-sonar-scanner-${PROJECT_VERSION}.crate"
-          dir="crates/cargo-sonar-scanner"
-          # A synthetic Maven coordinate, because releasability insists on one: ArtifactoryId.create
-          # parses every build-info module id as groupId:artifactId:version and throws on anything
-          # else. Without --module the id defaults to the build name, so CheckManifestValues fails
-          # with "sonar-scanner-cargo could not be parsed" before it looks at anything. Having a
-          # parseable coordinate at all is what fixes that; the check then passes because
-          # checkManifestsOfCommercialPlugins keeps only modules that are all of com.sonarsource.*,
-          # named sonar-*-plugin, and carrying a plugin JAR, and this is none of the three.
-          # Same pattern as sonarqube-cli, the other multi-platform CLI with no Maven build.
-          #
-          # org.sonarsource.* rather than com.sonarsource.* is a separate call: this is a public
-          # repository, and gh-action_release routes binaries by group id — get_binaries_repo() in
-          # main/release/utils/binaries.py sends com.* to CommercialDistribution and everything else
-          # to the public Distribution path.
-          module="org.sonarsource.scanner.cargo:cargo-sonar-scanner:${PROJECT_VERSION}"
-          # --flat, or the source hierarchy is preserved and the crate lands under a `target/package`
-          # of its own. --fail-no-op, or an empty build info would silently promote nothing.
-          jf rt upload --flat=true --fail-no-op \
-            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --module="$module" \
-            "target/package/$crate" "${ARTIFACTORY_DEPLOY_REPO}/${dir}/"
-          # A crate anywhere but `crates/<name>/<name>-<version>.crate` is stored but never indexed,
-          # so it would be published and still unresolvable.
-          if ! jf rt search "${ARTIFACTORY_DEPLOY_REPO}/${dir}/${crate}" | grep -q "$crate"; then
-            echo "::error::${dir}/${crate} is not in ${ARTIFACTORY_DEPLOY_REPO}"
-            exit 1
-          fi
-          # Same build info and the same module as the crate, so a release promotes the binaries with
-          # it rather than leaving them behind in `-qa`. An upload without --module would register a
-          # second module named after the build, and releasability would throw on that one instead.
-          #
-          # Maven layout, not because anything indexes it, but because it is the only shape the
-          # release can fetch from: Artifactory.download builds
-          # `<repo>/<groupId as path>/<artifactId>/<version>/<artifactId>-<version>-<qual>.<ext>`
-          # out of each ARTIFACTS_TO_PUBLISH entry, and 404s on anything else.
-          jf rt upload --flat=true --fail-no-op \
-            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --module="$module" \
-            "binaries/*" \
-            "${ARTIFACTORY_DEPLOY_REPO}/org/sonarsource/scanner/cargo/cargo-sonar-scanner/${PROJECT_VERSION}/"
-          jf rt build-collect-env "$BUILD_NAME" "$BUILD_NUMBER"
-          jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER"
-          jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
+        run: .github/scripts/deploy-to-repox.sh
 
       - name: Summarise
         run: |
