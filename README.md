@@ -7,15 +7,11 @@ $ export SONAR_TOKEN=...
 $ cargo sonar-scanner
 ```
 
-> **Status: work in progress.** The bootstrapper is complete — configuration resolution, JRE and
-> scanner engine provisioning, and the handoff to the engine — but it has not been released yet, so
-> it has to be built from a checkout. See SCANCARGO-2.
-
 ## Install
 
 ```console
-$ cargo binstall cargo-sonar-scanner  # a prebuilt binary — once released
-$ cargo install cargo-sonar-scanner   # compiled from source — once released
+$ cargo binstall cargo-sonar-scanner  # a prebuilt binary
+$ cargo install cargo-sonar-scanner   # compiled from source
 $ cargo install --path .              # from a checkout
 ```
 
@@ -49,8 +45,7 @@ public key at <https://binaries.sonarsource.com/sonarsource-public.key>, and by 
 `.sha256` sums.
 
 A `cargo-sonar-scanner-<version>-checksums.txt` collecting the SHA-256 sums of all five archives in
-`sha256sum -c` format is built alongside them, but stays in Repox — it is not part of the public
-distribution.
+`sha256sum -c` format is built for each release, but is not part of the public distribution.
 
 The Linux builds are statically linked against musl, so one archive per architecture covers musl and
 glibc distributions alike. The macOS binaries are **not signed or notarised yet**, so Gatekeeper
