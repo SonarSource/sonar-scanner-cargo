@@ -73,24 +73,8 @@ jobs:
           secrets: |
             development/artifactory/token/{REPO_OWNER_NAME_DASH}-public-reader access_token | ARTIFACTORY_ACCESS_TOKEN;
 
-      # Dependencies resolve through Repox rather than crates.io directly. This file is generated
-      # here and never committed: committing it would break external contributors, who have no
-      # Repox credentials.
       - name: Route crates.io through Repox
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [registry]
-          # Repox requires authentication, and Cargo refuses to talk to an authenticated registry
-          # without an explicit credential provider. The token comes from the environment.
-          global-credential-providers = ["cargo:token"]
-
-          [registries.repox]
-          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
-
-          [source.crates-io]
-          replace-with = "repox"
-          EOF
+        run: .github/scripts/route-crates-io-through-repox.sh
 
       - name: Check the formatting
         run: cargo fmt --all --check
@@ -238,18 +222,7 @@ jobs:
 
       - name: Route crates.io through Repox
         shell: bash
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [registry]
-          global-credential-providers = ["cargo:token"]
-
-          [registries.repox]
-          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
-
-          [source.crates-io]
-          replace-with = "repox"
-          EOF
+        run: .github/scripts/route-crates-io-through-repox.sh
 
       # Only Linux needs `vendored-openssl`: it is the one target family whose `native-tls` has a
       # library to compile. Windows links SChannel, whose import libraries zig ships.
@@ -410,42 +383,17 @@ jobs:
         with:
           secrets: |
             development/artifactory/token/{REPO_OWNER_NAME_DASH}-qa-deployer access_token | ARTIFACTORY_DEPLOY_TOKEN;
+            development/kv/data/sign key | GPG_SIGNING_KEY;
+            development/kv/data/sign passphrase | GPG_SIGNING_PASSPHRASE;
 
       # Only for resolving dependencies while packaging; the deploy goes through the JFrog CLI.
       - name: Route crates.io through Repox
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'EOF'
-          [registry]
-          global-credential-providers = ["cargo:token"]
-
-          [registries.repox]
-          index = "sparse+https://repox.jfrog.io/artifactory/api/cargo/crates-io/index/"
-
-          [source.crates-io]
-          replace-with = "repox"
-          EOF
+        run: .github/scripts/route-crates-io-through-repox.sh
 
       # Cargo has no flag for a build number, and `--locked` compares the manifest version against
       # Cargo.lock, so both files move together.
       - name: Stamp the build version
-        run: |
-          release=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
-          if [[ -z "$release" ]]; then
-            echo "::error::Cargo.toml declares no version"
-            exit 1
-          fi
-          version="${release}-${BUILD_NUMBER}"
-          # The package's own version only: the first in Cargo.toml, the line after its name in
-          # Cargo.lock. Dependency versions are left be.
-          awk -v v="$version" '!done && /^version = /{print "version = \"" v "\""; done=1; next} {print}' \
-            Cargo.toml > Cargo.toml.stamped && mv Cargo.toml.stamped Cargo.toml
-          awk -v v="$version" '/^name = "cargo-sonar-scanner"$/{print; getline; print "version = \"" v "\""; next} {print}' \
-            Cargo.lock > Cargo.lock.stamped && mv Cargo.lock.stamped Cargo.lock
-          # Reaches the build info via `jf rt build-collect-env` below, where the promotion and the
-          # release read it back.
-          echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
-          echo "Building $BUILD_NAME/$BUILD_NUMBER as $version"
+        run: .github/scripts/stamp-build-version.sh
 
       # `--allow-dirty`: the stamp above edits the manifest. The verification build is kept — it is
       # the last check that the packaged crate compiles on its own.
@@ -464,71 +412,34 @@ jobs:
       # Named with the version only now, so the binaries job never has to derive one. The checksum
       # is generated here rather than per-runner so that all of them come from one implementation.
       - name: Name and checksum the binaries
-        run: |
-          cd binaries
-          for archive in *; do
-            case "$archive" in
-              cargo-sonar-scanner-*.tar.gz) target="${archive#cargo-sonar-scanner-}"; target="${target%.tar.gz}"; ext="tar.gz" ;;
-              cargo-sonar-scanner-*.zip)    target="${archive#cargo-sonar-scanner-}"; target="${target%.zip}";    ext="zip" ;;
-              *) echo "::error::unexpected artefact $archive"; exit 1 ;;
-            esac
-            mv "$archive" "cargo-sonar-scanner-${PROJECT_VERSION}-${target}.${ext}"
-          done
-          # Written outside the directory first: redirecting into it would have the shell create the
-          # file before the glob expands, and the checksum list would contain itself.
-          sha256sum cargo-sonar-scanner-* > ../checksums
-          # Deliberately not `.sha256`: Artifactory reads an uploaded `<file>.sha256` as a checksum
-          # to apply to `<file>`, and rejects the upload because no such artefact exists.
-          mv ../checksums "cargo-sonar-scanner-${PROJECT_VERSION}-checksums.txt"
-          ls -l
+        run: .github/scripts/name-and-checksum-binaries.sh
+
+      # The archives and the binstall metadata have to agree on one URL, and nothing else forces them
+      # to: the names are built here, the template lives in Cargo.toml, and the path in between is
+      # gh-action_release's. Resolve the template the way `cargo binstall` will and compare, in both
+      # directions — every archive is reachable from the metadata, and every override names an
+      # archive — so that renaming one, adding or dropping a target, or changing the layout fails the
+      # build rather than a user's install.
+      - name: Check the binstall metadata resolves to the published archives
+        run: .github/scripts/check-binstall-metadata.sh
+
+      # gh-action_release fetches an `.asc` alongside every artefact it publishes to
+      # binaries.sonarsource.com and fails the release if one is missing — see
+      # Binaries.get_actual_checksums. The md5/sha1/sha256 siblings it also fetches are served
+      # virtually by Artifactory, so the signature is the only one that has to be uploaded.
+      #
+      # Here rather than in the binaries job because a signature is over bytes, not names, and the
+      # names are only settled above — one `.asc` per final artefact, from one implementation.
+      - name: Sign the binaries
+        env:
+          GPG_SIGNING_KEY: ${{ fromJSON(steps.secrets.outputs.vault).GPG_SIGNING_KEY }}
+          GPG_SIGNING_PASSPHRASE: ${{ fromJSON(steps.secrets.outputs.vault).GPG_SIGNING_PASSPHRASE }}
+        run: .github/scripts/sign-binaries.sh
 
       - name: Deploy to Repox
         env:
           ARTIFACTORY_DEPLOY_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_DEPLOY_TOKEN }}
-        run: |
-          jf config remove repox > /dev/null 2>&1 || true
-          jf config add repox \
-            --url https://repox.jfrog.io \
-            --artifactory-url https://repox.jfrog.io/artifactory \
-            --access-token "$ARTIFACTORY_DEPLOY_TOKEN"
-          jf config use repox
-          crate="cargo-sonar-scanner-${PROJECT_VERSION}.crate"
-          dir="crates/cargo-sonar-scanner"
-          # A synthetic Maven coordinate, because releasability insists on one: ArtifactoryId.create
-          # parses every build-info module id as groupId:artifactId:version and throws on anything
-          # else. Without --module the id defaults to the build name, so CheckManifestValues fails
-          # with "sonar-scanner-cargo could not be parsed" before it looks at anything. Having a
-          # parseable coordinate at all is what fixes that; the check then passes because
-          # checkManifestsOfCommercialPlugins keeps only modules that are all of com.sonarsource.*,
-          # named sonar-*-plugin, and carrying a plugin JAR, and this is none of the three.
-          # Same pattern as sonarqube-cli, the other multi-platform CLI with no Maven build.
-          #
-          # org.sonarsource.* rather than com.sonarsource.* is a separate call: this is a public
-          # repository, and gh-action_release routes binaries by group id — get_binaries_repo() in
-          # main/release/utils/binaries.py sends com.* to CommercialDistribution and everything else
-          # to the public Distribution path.
-          module="org.sonarsource.scanner.cargo:cargo-sonar-scanner:${PROJECT_VERSION}"
-          # --flat, or the source hierarchy is preserved and the crate lands under a `target/package`
-          # of its own. --fail-no-op, or an empty build info would silently promote nothing.
-          jf rt upload --flat=true --fail-no-op \
-            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --module="$module" \
-            "target/package/$crate" "${ARTIFACTORY_DEPLOY_REPO}/${dir}/"
-          # A crate anywhere but `crates/<name>/<name>-<version>.crate` is stored but never indexed,
-          # so it would be published and still unresolvable.
-          if ! jf rt search "${ARTIFACTORY_DEPLOY_REPO}/${dir}/${crate}" | grep -q "$crate"; then
-            echo "::error::${dir}/${crate} is not in ${ARTIFACTORY_DEPLOY_REPO}"
-            exit 1
-          fi
-          # Same build info and the same module as the crate, so a release promotes the binaries with
-          # it rather than leaving them behind in `-qa`. An upload without --module would register a
-          # second module named after the build, and releasability would throw on that one instead.
-          # No index layout to respect here: unlike the crate, nothing resolves these by path.
-          jf rt upload --flat=true --fail-no-op \
-            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" --module="$module" \
-            "binaries/*" "${ARTIFACTORY_DEPLOY_REPO}/binaries/cargo-sonar-scanner/${PROJECT_VERSION}/"
-          jf rt build-collect-env "$BUILD_NAME" "$BUILD_NUMBER"
-          jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER"
-          jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
+        run: .github/scripts/deploy-to-repox.sh
 
       - name: Summarise
         run: |

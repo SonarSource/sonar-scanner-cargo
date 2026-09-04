@@ -14,16 +14,23 @@ $ cargo sonar-scanner
 ## Install
 
 ```console
-$ cargo install --path .          # from a checkout
+$ cargo binstall cargo-sonar-scanner  # a prebuilt binary — once released
+$ cargo install cargo-sonar-scanner   # compiled from source — once released
+$ cargo install --path .              # from a checkout
 ```
 
 The binary is called `cargo-sonar-scanner`; once it is on `PATH`, Cargo resolves
 `cargo sonar-scanner`. It also works when invoked directly as `cargo-sonar-scanner <args…>`.
 
+[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) is the fast route: it downloads the
+archive for your platform from `binaries.sonarsource.com` rather than compiling the crate. It falls
+back to `cargo install` on a platform we publish no binary for.
+
 ### Prebuilt binaries
 
 Every build also produces a self-contained binary per platform, so CI does not need a Rust
-toolchain to run an analysis:
+toolchain to run an analysis. Released archives are published to
+`https://binaries.sonarsource.com/Distribution/cargo-sonar-scanner/`:
 
 | Platform | Archive |
 | --- | --- |
@@ -33,8 +40,17 @@ toolchain to run an analysis:
 | macOS aarch64 | `cargo-sonar-scanner-<version>-aarch64-apple-darwin.tar.gz` |
 | Windows x86_64 | `cargo-sonar-scanner-<version>-x86_64-pc-windows-gnu.zip` |
 
-`cargo-sonar-scanner-<version>-checksums.txt` alongside them carries the SHA-256 sums, in
-`sha256sum -c` format.
+`<version>` there is the full build version, `<semver>-<build number>` — `0.1.0-46`, not `0.1.0`.
+The crates.io version is the SemVer part alone, so `cargo binstall` reconstructs the rest from
+metadata baked into the published crate.
+
+Each archive is accompanied by a `.asc` detached signature, verifiable against the SonarSource
+public key at <https://binaries.sonarsource.com/sonarsource-public.key>, and by `.md5`, `.sha1` and
+`.sha256` sums.
+
+A `cargo-sonar-scanner-<version>-checksums.txt` collecting the SHA-256 sums of all five archives in
+`sha256sum -c` format is built alongside them, but stays in Repox — it is not part of the public
+distribution.
 
 The Linux builds are statically linked against musl, so one archive per architecture covers musl and
 glibc distributions alike. The macOS binaries are **not signed or notarised yet**, so Gatekeeper

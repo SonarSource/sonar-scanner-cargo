@@ -38,6 +38,29 @@ include = [
 name = "cargo-sonar-scanner"
 path = "src/main.rs"
 
+# Where `cargo binstall cargo-sonar-scanner` fetches a prebuilt archive instead of compiling one.
+# The URLs point at the same archives release.yml publishes to binaries.sonarsource.com; see
+# `binaries` and `deploy` in .github/workflows/build.yml for how they are named.
+#
+# `{ build }` is not one of binstall's template variables. gh-action_release's crates.io job
+# substitutes it for the build number before packaging, because crates.io only ever sees the plain
+# SemVer version while every published artefact is named `<version>-<build>`. It follows that these
+# URLs only resolve in a published crate: run against this working copy, binstall sees a placeholder
+# it does not understand.
+#
+# The extension is written out rather than taken from `{ archive-suffix }`, which renders `.tgz`
+# first for `pkg-fmt = "tgz"`.
+[package.metadata.binstall]
+pkg-url = "https://binaries.sonarsource.com/Distribution/{ name }/{ name }-{ version }-{ build }-{ target }.tar.gz"
+pkg-fmt = "tgz"
+# Matches the directory the archive is built around, in the `binaries` job.
+bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
+
+# The one target packed as a zip, because that is what a Windows user expects to be handed.
+[package.metadata.binstall.overrides.x86_64-pc-windows-gnu]
+pkg-url = "https://binaries.sonarsource.com/Distribution/{ name }/{ name }-{ version }-{ build }-{ target }.zip"
+pkg-fmt = "zip"
+
 [features]
 # Build OpenSSL from source and link it statically, for the released Linux binaries only.
 #
