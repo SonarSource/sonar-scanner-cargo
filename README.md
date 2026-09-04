@@ -68,5 +68,5 @@ The LGPL is a set of additional permissions on top of the GPL rather than a stan
 incorporates, **not** an alternative license you may choose. See also [NOTICE.txt](NOTICE.txt).
 
 The bootstrapper is licensed independently of what it downloads and runs: the scanner engine and the
-analyzers it provisions at run time carry their own licenses, as does
-[sonar-rust](https://github.com/SonarSource/sonar-rust).
+analyzers it provisions at run time, including the Rust analyzer used by SonarQube Server and
+SonarQube Cloud, carry their own licenses.
