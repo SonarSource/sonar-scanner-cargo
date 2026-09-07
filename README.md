@@ -17,7 +17,7 @@ $ cargo install cargo-sonar-scanner   # compiled from source
 The binary is called `cargo-sonar-scanner`; once it is on `PATH`, Cargo resolves
 `cargo sonar-scanner`. [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) downloads a
 prebuilt archive for your platform instead of compiling — see the
-[prebuilt binaries](docs/user-guide.md#prebuilt-binaries) section of the user guide for direct
+[prebuilt binaries](crate-docs/user-guide.md#prebuilt-binaries) section of the user guide for direct
 downloads and signature verification.
 
 ## Usage
@@ -35,7 +35,7 @@ project-key = "my-org_my-crate"
 host-url = "https://sonarqube.example.com"
 ```
 
-See the **[user guide](docs/user-guide.md)** for the full reference: configuration precedence, key
+See the **[user guide](crate-docs/user-guide.md)** for the full reference: configuration precedence, key
 naming, custom certificates, endpoint resolution, and troubleshooting.
 
 ## Development

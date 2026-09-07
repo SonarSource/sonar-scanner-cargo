@@ -23,7 +23,8 @@ publish = ["crates-io"]
 include = [
     "/src",
     "/tests",
-    "/docs",
+    # Published docs only: the rest of /docs (design notes, test plans) is repo-internal.
+    "/crate-docs",
     "/Cargo.toml",
     "/README.md",
     "/LICENSE.txt",
