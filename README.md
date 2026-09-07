@@ -44,6 +44,7 @@ naming, custom certificates, endpoint resolution, and troubleshooting.
 $ cargo test
 $ cargo fmt --check
 $ cargo clippy --all-targets -- -D warnings
+$ cargo install --path .   # build and install your local changes as `cargo-sonar-scanner`
 ```
 
 The Rust toolchain is pinned in `rust-toolchain.toml`, which rustup and IDEs pick up
