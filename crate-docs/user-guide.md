@@ -21,9 +21,9 @@ toolchain to run an analysis. Released archives are published to
 The crates.io version is the SemVer part alone, so `cargo binstall` reconstructs the rest from
 metadata baked into the published crate.
 
-On a platform we publish no binary for, `cargo binstall` falls back to `cargo install`, silently
-compiling from source instead of downloading — expect a much longer wait than the usual prebuilt
-download in that case.
+On a platform we publish no binary for, `cargo binstall` warns and falls back to `cargo install`,
+compiling from source instead of downloading (it asks for confirmation unless run with `-y`) —
+expect a much longer wait than the usual prebuilt download in that case.
 
 Each archive is accompanied by a `.asc` detached signature, verifiable against the SonarSource
 public key at <https://binaries.sonarsource.com/sonarsource-public.key>, and by `.md5`, `.sha1` and

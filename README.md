@@ -38,6 +38,16 @@ host-url = "https://sonarqube.example.com"
 See the **[user guide](crate-docs/user-guide.md)** for the full reference: configuration precedence, key
 naming, custom certificates, endpoint resolution, and troubleshooting.
 
+## Getting Help
+
+See the **[user guide](crate-docs/user-guide.md)**, including its
+[troubleshooting](crate-docs/user-guide.md#troubleshooting) section, for problems specific to this
+scanner. For documentation on the products themselves, see
+[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code) or
+[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code). If you can't
+find an answer there, reach out in the
+[community forum and help center](https://community.sonarsource.com/).
+
 ## Development
 
 ```console
@@ -56,14 +66,6 @@ claim rather than an aspiration. Raising it is a deliberate act: change `rust-ve
 
 New source files must carry the header in [`license-header.txt`](license-header.txt); CI enforces
 it.
-
-## Getting Help
-
-Documentation is available for
-[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/languages/rust)
-and [SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/languages/rust).
-If you can't find an answer there, reach out in the
-[community forum and help center](https://community.sonarsource.com/).
 
 ## License
 
