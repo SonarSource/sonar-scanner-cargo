@@ -33,6 +33,12 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      # The same CI metadata build.yml's Next analysis records (.github/workflows/build.yml:330-332).
+      # This job re-analyses the default branch on Next, so without it the latest master analysis
+      # there would alternate between one carrying the metadata and one dropping it. Set once for
+      # the whole job rather than per step, so the three scans stay identical bar the platform.
+      SONAR_SCANNER_JSON_PARAMS: '{"sonar.analysis.pipeline":"${{ github.run_id }}","sonar.analysis.repository":"${{ github.repository }}"}'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
