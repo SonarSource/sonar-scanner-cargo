@@ -15,6 +15,8 @@ name: Unified Dogfooding scans
 # - development/kv/data/next: {}
 # - development/kv/data/sonarcloud: {}
 # - development/kv/data/sonarqube-us: {}
+# - development/artifactory/token/{REPO_OWNER_NAME_DASH}-public-reader: access_token
+#   (dependencies resolve through Repox when building the scanner)
 #
 # 📖 Documentation: https://xtranet-sonarsource.atlassian.net/wiki/spaces/Platform/pages/4285333581/GitHub+CI+CD+Starting+Guide+-+GitHub#Unified-Platform-Dogfooding-(Shadow-Scanning)
 
