@@ -15,14 +15,15 @@ name: Unified Dogfooding scans
 # - development/kv/data/next: {}
 # - development/kv/data/sonarcloud: {}
 # - development/kv/data/sonarqube-us: {}
+# - development/artifactory/token/{REPO_OWNER_NAME_DASH}-public-reader: access_token
+#   (dependencies resolve through Repox when building the scanner)
 #
 # 📖 Documentation: https://xtranet-sonarsource.atlassian.net/wiki/spaces/Platform/pages/4285333581/GitHub+CI+CD+Starting+Guide+-+GitHub#Unified-Platform-Dogfooding-(Shadow-Scanning)
 
 on:
-  # TODO: Uncomment and configure the schedule when ready for automated runs
-  # schedule:
-  #   # Run the workflow every day at 04:00 UTC
-  #   - cron: '0 4 * * *'
+  schedule:
+    # Run the workflow every day at 04:00 UTC
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 jobs:
@@ -31,27 +32,86 @@ jobs:
     name: Build
     permissions:
       id-token: write
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      # TODO: Choose and uncomment the appropriate build action for your project:
-      # - uses: SonarSource/ci-github-actions/build-maven@v1       # For Maven-based Java projects
-      # - uses: SonarSource/ci-github-actions/build-gradle@v1      # For Gradle-based Java projects
-      # - uses: SonarSource/ci-github-actions/build-poetry@v1      # For Python projects using Poetry
-      # - uses: SonarSource/ci-github-actions/build-npm@v1         # For Node.js projects using npm
-      # - uses: SonarSource/ci-github-actions/build-yarn@v1        # For Node.js projects using Yarn
-      - uses: SonarSource/ci-github-actions/BUILD-ACTION-HERE@v1
         with:
-          run-shadow-scans: true
+          # Full history so SonarQube can assign issues to the right authors.
+          fetch-depth: 0
+
+      - name: Set up tools
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.7.7
+
+      - name: Vault
+        id: secrets
+        uses: SonarSource/vault-action-wrapper@0a3114fe1230b784c35b53b099f9ab1f1e538cc7 # 3.5.0
+        with:
+          secrets: |
+            development/artifactory/token/{REPO_OWNER_NAME_DASH}-public-reader access_token | ARTIFACTORY_ACCESS_TOKEN;
+            development/kv/data/next url | NEXT_URL;
+            development/kv/data/next token | NEXT_TOKEN;
+            development/kv/data/sonarcloud url | SQC_EU_URL;
+            development/kv/data/sonarcloud token | SQC_EU_TOKEN;
+            development/kv/data/sonarqube-us url | SQC_US_URL;
+            development/kv/data/sonarqube-us token | SQC_US_TOKEN;
+
+      - name: Route crates.io through Repox
+        run: .github/scripts/route-crates-io-through-repox.sh
+
+      # ci-github-actions has no build-* action for Cargo yet (only Maven, Gradle, npm, Yarn and
+      # Poetry), so unlike those languages this job drives the three shadow scans directly with
+      # the scanner this repository builds, `cargo sonar-scanner`, rather than through a reusable
+      # build action's `run-shadow-scans` input.
+      - name: Build cargo-sonar-scanner
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo build --release --locked
+
+      # One project, scanned three times for IRIS to compare — not three different projects — so
+      # all three keys below are the same. sonar-project.properties supplies the rest (key,
+      # sources, tests, exclusions); only the destination platform changes per step.
+      #
+      # The `sonar.analysis.*` properties are the CI metadata build.yml's Next analysis records
+      # (.github/workflows/build.yml:330-332). The primary scan re-analyses the default branch on
+      # Next, so without them the latest master analysis there would alternate between one
+      # carrying the metadata and one dropping it.
+      - name: Analyze on Next (primary)
+        env:
+          SONAR_HOST_URL: ${{ fromJSON(steps.secrets.outputs.vault).NEXT_URL }}
+          SONAR_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).NEXT_TOKEN }}
+        run: >
+          ./target/release/cargo-sonar-scanner
+          -Dsonar.analysis.pipeline=${{ github.run_id }}
+          -Dsonar.analysis.repository=${{ github.repository }}
+
+      - name: Analyze on SonarQube Cloud EU (shadow)
+        env:
+          SONAR_HOST_URL: ${{ fromJSON(steps.secrets.outputs.vault).SQC_EU_URL }}
+          SONAR_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).SQC_EU_TOKEN }}
+        run: >
+          ./target/release/cargo-sonar-scanner
+          -Dsonar.analysis.pipeline=${{ github.run_id }}
+          -Dsonar.analysis.repository=${{ github.repository }}
+
+      - name: Analyze on SonarQube Cloud US (shadow)
+        env:
+          SONAR_HOST_URL: ${{ fromJSON(steps.secrets.outputs.vault).SQC_US_URL }}
+          SONAR_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).SQC_US_TOKEN }}
+          # SQC US resolves its API base from the region rather than the host URL alone.
+          SONAR_REGION: us
+        run: >
+          ./target/release/cargo-sonar-scanner
+          -Dsonar.analysis.pipeline=${{ github.run_id }}
+          -Dsonar.analysis.repository=${{ github.repository }}
 
       - name: Run IRIS Analysis
-        uses: SonarSource/unified-dogfooding-actions/run-iris@master
+        uses: SonarSource/unified-dogfooding-actions/run-iris@v1
         with:
-          # TODO: Replace these placeholders with your actual project keys and platforms
-          primary_project_key: "YOUR-PROJECT-KEY"
-          primary_platform: "SQC-EU"  # Options: SQC-EU, SQC-US, Next
-          shadow1_project_key: "YOUR-PROJECT-KEY"
-          shadow1_platform: "Next"  # Options: SQC-EU, SQC-US, Next
-          shadow2_project_key: "YOUR-PROJECT-KEY"
+          primary_project_key: "SonarSource_sonar-scanner-cargo"
+          primary_platform: "Next"  # Options: SQC-EU, SQC-US, Next
+          shadow1_project_key: "SonarSource_sonar-scanner-cargo"
+          shadow1_platform: "SQC-EU"  # Options: SQC-EU, SQC-US, Next
+          shadow2_project_key: "SonarSource_sonar-scanner-cargo"
           shadow2_platform: "SQC-US"  # Options: SQC-EU, SQC-US, Next
