@@ -33,12 +33,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    env:
-      # The same CI metadata build.yml's Next analysis records (.github/workflows/build.yml:330-332).
-      # This job re-analyses the default branch on Next, so without it the latest master analysis
-      # there would alternate between one carrying the metadata and one dropping it. Set once for
-      # the whole job rather than per step, so the three scans stay identical bar the platform.
-      SONAR_SCANNER_JSON_PARAMS: '{"sonar.analysis.pipeline":"${{ github.run_id }}","sonar.analysis.repository":"${{ github.repository }}"}'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -78,17 +72,28 @@ jobs:
       # One project, scanned three times for IRIS to compare — not three different projects — so
       # all three keys below are the same. sonar-project.properties supplies the rest (key,
       # sources, tests, exclusions); only the destination platform changes per step.
+      #
+      # The `sonar.analysis.*` properties are the CI metadata build.yml's Next analysis records
+      # (.github/workflows/build.yml:330-332). The primary scan re-analyses the default branch on
+      # Next, so without them the latest master analysis there would alternate between one
+      # carrying the metadata and one dropping it.
       - name: Analyze on Next (primary)
         env:
           SONAR_HOST_URL: ${{ fromJSON(steps.secrets.outputs.vault).NEXT_URL }}
           SONAR_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).NEXT_TOKEN }}
-        run: ./target/release/cargo-sonar-scanner
+        run: >
+          ./target/release/cargo-sonar-scanner
+          -Dsonar.analysis.pipeline=${{ github.run_id }}
+          -Dsonar.analysis.repository=${{ github.repository }}
 
       - name: Analyze on SonarQube Cloud EU (shadow)
         env:
           SONAR_HOST_URL: ${{ fromJSON(steps.secrets.outputs.vault).SQC_EU_URL }}
           SONAR_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).SQC_EU_TOKEN }}
-        run: ./target/release/cargo-sonar-scanner
+        run: >
+          ./target/release/cargo-sonar-scanner
+          -Dsonar.analysis.pipeline=${{ github.run_id }}
+          -Dsonar.analysis.repository=${{ github.repository }}
 
       - name: Analyze on SonarQube Cloud US (shadow)
         env:
@@ -96,7 +101,10 @@ jobs:
           SONAR_TOKEN: ${{ fromJSON(steps.secrets.outputs.vault).SQC_US_TOKEN }}
           # SQC US resolves its API base from the region rather than the host URL alone.
           SONAR_REGION: us
-        run: ./target/release/cargo-sonar-scanner
+        run: >
+          ./target/release/cargo-sonar-scanner
+          -Dsonar.analysis.pipeline=${{ github.run_id }}
+          -Dsonar.analysis.repository=${{ github.repository }}
 
       - name: Run IRIS Analysis
         uses: SonarSource/unified-dogfooding-actions/run-iris@v1
