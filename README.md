@@ -40,9 +40,9 @@ naming, custom certificates, endpoint resolution, and troubleshooting.
 
 ## Getting Help
 
-See the **[user guide](crate-docs/user-guide.md)**, including its
-[troubleshooting](crate-docs/user-guide.md#troubleshooting) section, for problems specific to this
-scanner. For documentation on the products themselves, see
+For problems specific to this scanner, see the user guide's
+[troubleshooting](crate-docs/user-guide.md#troubleshooting) section. For documentation on the
+products themselves, see
 [SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code) or
 [SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code). If you can't
 find an answer there, reach out in the
