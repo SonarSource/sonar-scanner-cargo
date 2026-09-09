@@ -69,6 +69,9 @@ pub enum JreError {
     #[error("The server reported {java_path:?} as the Java executable of {filename}, which is not a path inside it.")]
     UnusableJavaPath { filename: String, java_path: String },
 
+    #[error("The server offers the JRE {filename} with neither a download URL nor an id to download it with.")]
+    UndownloadableJre { filename: String },
+
     #[error(
         "No Java runtime was found. Install Java 17 or later and set JAVA_HOME, or put java on the PATH, \
          or point -Dsonar.scanner.javaExePath=<path> at one, or let the scanner provision a JRE by \
@@ -107,7 +110,9 @@ impl CacheHit {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Metadata {
-    id: String,
+    /// Names the archive on the API's own download route. SonarQube Cloud has no such route and sends
+    /// no id at all, always a `downloadUrl`; SonarQube Server does the opposite.
+    id: Option<String>,
     filename: String,
     sha256: String,
     /// The Java executable's path inside the archive, e.g. `jdk-17.0.13+11-jre/bin/java`.
@@ -162,7 +167,7 @@ fn provision(
         let Some(metadata) = jres.into_iter().next() else {
             return Ok(None);
         };
-        debug!("The server offers the JRE {} ({})", metadata.filename, metadata.id);
+        debug!("The server offers the JRE {}", metadata.filename);
         install(client, api_base_url, cache, &metadata).map(Some)
     })
 }
@@ -176,16 +181,16 @@ fn install(client: &HttpClient, api_base_url: &str, cache: &Cache, metadata: &Me
         }
         .into());
     }
-    let entry = cache.entry(&metadata.filename, &metadata.sha256)?;
-
     // A `downloadUrl` usually points at a CDN, which is a foreign origin and therefore gets no token:
     // that rule lives in the HTTP client, so both branches are the same call here.
     // The id comes from the server's JSON and lands in a path segment, so it is encoded rather than
     // pasted: a `/` or a `?` in it would otherwise decide which URL is called.
-    let url = metadata
-        .download_url
-        .clone()
-        .unwrap_or_else(|| format!("{api_base_url}{JRES_ENDPOINT}/{}", encoded(&metadata.id)));
+    let url = match (&metadata.download_url, &metadata.id) {
+        (Some(url), _) => url.clone(),
+        (None, Some(id)) => format!("{api_base_url}{JRES_ENDPOINT}/{}", encoded(id)),
+        (None, None) => return Err(JreError::UndownloadableJre { filename: metadata.filename.clone() }.into()),
+    };
+    let entry = cache.entry(&metadata.filename, &metadata.sha256)?;
 
     let archive = entry.file(|sink| {
         info!("Downloading the JRE {} from {url}", metadata.filename);
@@ -431,6 +436,48 @@ mod tests {
         let download = cdn.last_request();
         assert_eq!(download.path, "/download/jre.tar.gz");
         assert_eq!(download.header("authorization"), None, "the CDN is a foreign origin");
+    }
+
+    /// SonarQube Cloud serves every JRE from its CDN: the metadata carries a `downloadUrl` and no
+    /// `id` at all.
+    #[test]
+    fn provisions_a_jre_offered_without_an_id() {
+        let dir = tempdir();
+        let home = tempdir();
+        let (archive, checksum) = jre_archive(&dir);
+        let cdn = TestServer::start(move |_| Response::bytes(&archive));
+        let cdn_url = cdn.url("/jres/jre.tar.gz");
+        let server = TestServer::start(move |_| {
+            Response::json(&format!(
+                r#"[{{"filename":"jre.tar.gz","sha256":"{checksum}","javaPath":"jre/bin/java",
+                     "os":"linux","arch":"x86_64","downloadUrl":"{cdn_url}"}}]"#
+            ))
+        });
+
+        let jre = resolve_against(&server, &home, &[], &[]).unwrap();
+
+        assert!(jre.java_exe.is_file());
+        assert_eq!(cdn.last_request().path, "/jres/jre.tar.gz");
+    }
+
+    #[test]
+    fn reports_a_jre_that_can_not_be_downloaded() {
+        let dir = tempdir();
+        let home = tempdir();
+        let (_, checksum) = jre_archive(&dir);
+        let server = TestServer::start(move |_| {
+            Response::json(&format!(
+                r#"[{{"filename":"jre.tar.gz","sha256":"{checksum}","javaPath":"jre/bin/java",
+                     "os":"linux","arch":"x86_64"}}]"#
+            ))
+        });
+
+        let failure = resolve_against(&server, &home, &[], &[]).unwrap_err();
+
+        assert_eq!(
+            failure.to_string(),
+            "The server offers the JRE jre.tar.gz with neither a download URL nor an id to download it with."
+        );
     }
 
     /// The JRE may be republished between the metadata call and the download, which invalidates the
