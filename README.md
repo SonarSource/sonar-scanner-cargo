@@ -16,9 +16,9 @@ $ cargo install cargo-sonar-scanner   # compiled from source
 
 The binary is called `cargo-sonar-scanner`; once it is on `PATH`, Cargo resolves
 `cargo sonar-scanner`. [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) downloads a
-prebuilt archive for your platform instead of compiling — see the
-[prebuilt binaries](crate-docs/user-guide.md#prebuilt-binaries) section of the user guide for direct
-downloads and signature verification.
+prebuilt archive for your platform instead of compiling — see
+[Prebuilt binaries](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#prebuilt-binaries)
+in the SonarScanner for Cargo documentation for direct downloads and signature verification.
 
 ## Usage
 
@@ -35,17 +35,20 @@ project-key = "my-org_my-crate"
 host-url = "https://sonarqube.example.com"
 ```
 
-See the **[user guide](crate-docs/user-guide.md)** for the full reference: configuration precedence, key
-naming, custom certificates, endpoint resolution, and troubleshooting.
+See the **SonarScanner for Cargo** documentation for the full reference — configuration precedence,
+key naming, custom certificates, endpoint resolution, and troubleshooting — on
+[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/)
+or
+[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/).
+This repository's [user guide](crate-docs/user-guide.md) covers the same ground for offline reading.
 
 ## Getting Help
 
-For problems specific to this scanner, see the user guide's
-[troubleshooting](crate-docs/user-guide.md#troubleshooting) section. For documentation on the
-products themselves, see
-[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code) or
-[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code). If you can't
-find an answer there, reach out in the
+For problems specific to this scanner, see the
+[troubleshooting](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)
+section of the SonarScanner for Cargo documentation (also on
+[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)).
+If you can't find an answer there, reach out in the
 [community forum and help center](https://community.sonarsource.com/).
 
 ## Development
