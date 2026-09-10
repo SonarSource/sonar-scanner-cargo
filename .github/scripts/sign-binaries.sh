@@ -11,7 +11,7 @@ cd binaries
 # at least one `.zip` (the Windows override), but nothing here should break if that changes.
 shopt -s nullglob
 # Archives only: `cargo-sonar-scanner-*` also matches the checksums.txt file, which stays in
-# Repox and is deliberately not part of the signed, publicly distributed set (see README.md).
+# Repox and is deliberately not part of the signed, publicly distributed set.
 # Expanded once, before the loop body creates any `.asc`, so signatures are not signed.
 for file in cargo-sonar-scanner-*.tar.gz cargo-sonar-scanner-*.zip; do
   printf '%s' "$GPG_SIGNING_PASSPHRASE" | gpg --batch --quiet \
