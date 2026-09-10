@@ -1,15 +1,18 @@
 # SonarScanner for Cargo
 
-Run SonarQube Server and SonarQube Cloud analysis on a Cargo project with one command:
+Run SonarQube Server and SonarQube Cloud analysis on a Cargo project from its directory:
 
 ```console
 $ export SONAR_TOKEN=...
-$ cargo sonar-scanner
+$ cargo sonar-scanner -Dsonar.projectKey=my-org_my-crate
 ```
 
+A project key is always required, and on SonarQube Cloud so is `sonar.organization`. Putting both in
+`Cargo.toml` (see [Usage](#usage)) gets the command down to a bare `cargo sonar-scanner`. With no
+host URL set the analysis goes to SonarQube Cloud; SonarQube Server must be 10.6 or newer.
+
 No Java installation is needed: the scanner provisions its own JRE and analysis engine on first run
-and caches them under `~/.sonar`. With nothing else configured the analysis targets SonarQube Cloud;
-SonarQube Server must be 10.6 or newer.
+and caches them under `~/.sonar`.
 
 ## Install
 
@@ -46,6 +49,16 @@ instead.
 
 > **Do not put your token in `Cargo.toml`.** It gets committed, and for a published crate it ships
 > inside the `.crate` archive on crates.io, where it cannot be deleted. Use `SONAR_TOKEN`.
+
+The table above is always read. What is *derived* from the crate itself — source roots, `target/**`
+exclusions, version, project links, coverage report paths — is off by default; opt in with:
+
+```console
+$ cargo sonar-scanner -Dsonar.scanner.autoconfig.enabled=true
+```
+
+On SonarQube Cloud it must also be enabled server-side. Without it, only the properties you set
+yourself apply.
 
 See the **SonarScanner for Cargo** documentation for the full reference — configuration precedence,
 key naming, custom certificates, endpoint resolution, and troubleshooting — on
