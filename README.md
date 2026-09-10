@@ -1,18 +1,15 @@
 # SonarScanner for Cargo
 
-Run SonarQube Server and SonarQube Cloud analysis on a Cargo project from its directory:
+Run a SonarQube Server or SonarQube Cloud analysis of a Cargo project with one command:
 
 ```console
 $ export SONAR_TOKEN=...
-$ cargo sonar-scanner -Dsonar.projectKey=my-org_my-crate
+$ cargo sonar-scanner
 ```
 
-A project key is always required, and on SonarQube Cloud so is `sonar.organization`. Putting both in
-`Cargo.toml` (see [Usage](#usage)) gets the command down to a bare `cargo sonar-scanner`. With no
-host URL set the analysis goes to SonarQube Cloud; SonarQube Server must be 10.6 or newer.
-
-No Java installation is needed: the scanner provisions its own JRE and analysis engine on first run
-and caches them under `~/.sonar`.
+Full documentation, including the configuration reference and troubleshooting:
+**[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
+| **[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
 
 ## Install
 
@@ -23,62 +20,59 @@ $ cargo install cargo-sonar-scanner   # compiled from source
 
 The binary is called `cargo-sonar-scanner`; once it is on `PATH`, Cargo resolves
 `cargo sonar-scanner`. [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) downloads a
-prebuilt archive for your platform instead of compiling, and offers a source build on platforms with
-no published archive — see
-[Prebuilt binaries](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#prebuilt-binaries)
-in the SonarScanner for Cargo documentation for direct downloads and signature verification.
+prebuilt archive for your platform instead of compiling, and prompts to build from source on
+platforms with no published archive (`-y` accepts).
 
-## Usage
+You need Cargo, and SonarQube Server 2026.1 or newer. No Java installation is required: the scanner
+provisions its own JRE and analysis engine on first run and caches them under `~/.sonar`.
 
-```console
-$ cargo sonar-scanner --help
-```
+## Configure
 
-Analysis parameters are Sonar properties, resolved from the command line first, then environment
-variables, then the `[package.metadata.sonar]` table in `Cargo.toml`:
+Identify the project in the `[package.metadata.sonar]` table of your `Cargo.toml`:
 
 ```toml
 [package.metadata.sonar]
-project-key = "my-org_my-crate"
+project-key = "my_project"
+
+# SonarQube Cloud
+organization = "my_organization"
+
+# SonarQube Server. With no host URL set, the analysis goes to SonarQube Cloud
 host-url = "https://sonarqube.example.com"
-exclusions = ["vendor/**"]
+
+# Cargo build output is not excluded for you
+exclusions = ["target/**"]
 ```
 
-In a virtual workspace — a root `Cargo.toml` with no `[package]` — use `[workspace.metadata.sonar]`
+In a virtual workspace (a root `Cargo.toml` with no `[package]`), use `[workspace.metadata.sonar]`
 instead.
 
 > **Do not put your token in `Cargo.toml`.** It gets committed, and for a published crate it ships
 > inside the `.crate` archive on crates.io, where it cannot be deleted. Use `SONAR_TOKEN`.
 
-The table above is always read. What is *derived* from the crate itself — source roots, `target/**`
-exclusions, version, project links, coverage report paths — is off by default; opt in with:
+Properties can also come from the command line (`-Dsonar.projectKey=my_project`), from environment
+variables, or from a `sonar-project.properties` file. A project key is always required, wherever you
+set it.
+
+## Run
 
 ```console
-$ cargo sonar-scanner -Dsonar.scanner.autoconfig.enabled=true
+$ cargo sonar-scanner              # analyse the current directory
+$ cargo sonar-scanner --dry-run    # resolve the configuration and contact nothing
+$ cargo sonar-scanner --help
 ```
 
-On SonarQube Cloud it must also be enabled server-side. Without it, only the properties you set
-yourself apply.
+## Getting help
 
-See the **SonarScanner for Cargo** documentation for the full reference — configuration precedence,
-key naming, custom certificates, endpoint resolution, and troubleshooting — on
-[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/)
+Start with `--dry-run`: it prints the endpoint, the base directory, and every resolved property with
+its origin, making no network request. That answers most "where did that value come from?" questions
+on its own.
+
+Beyond that, see the troubleshooting section of the documentation for
+[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)
 or
-[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/).
-This repository's [user guide](crate-docs/user-guide.md) covers the same ground for offline reading.
-
-## Getting Help
-
-Start with `cargo sonar-scanner --dry-run`: it resolves the configuration and prints every property
-with its origin, making no network request. That answers most "where did that value come from?"
-questions before anything else.
-
-For problems specific to this scanner, see the
-[troubleshooting](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)
-section of the SonarScanner for Cargo documentation (also on
-[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)).
-If you can't find an answer there, reach out in the
-[community forum and help center](https://community.sonarsource.com/).
+[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting),
+then the [community forum and help center](https://community.sonarsource.com/).
 
 ## Development
 
