@@ -1,11 +1,15 @@
 # SonarScanner for Cargo
 
-Run a SonarQube Server or SonarQube Cloud analysis of a Cargo project with one command:
+Analyse a Cargo project with SonarQube Server or SonarQube Cloud, from the project's directory:
 
 ```console
 $ export SONAR_TOKEN=...
-$ cargo sonar-scanner
+$ cargo sonar-scanner -Dsonar.projectKey=my_project
 ```
+
+A project key is always required, and on SonarQube Cloud so is `sonar.organization`. Put both in
+`Cargo.toml` (see [Configure](#configure)) and the command comes down to a bare
+`cargo sonar-scanner`. With no host URL set, the analysis goes to SonarQube Cloud.
 
 Full documentation, including the configuration reference and troubleshooting:
 **[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
@@ -37,7 +41,7 @@ project-key = "my_project"
 # SonarQube Cloud
 organization = "my_organization"
 
-# SonarQube Server. With no host URL set, the analysis goes to SonarQube Cloud
+# SonarQube Server
 host-url = "https://sonarqube.example.com"
 
 # Cargo build output is not excluded for you
@@ -57,7 +61,7 @@ set it.
 ## Run
 
 ```console
-$ cargo sonar-scanner              # analyse the current directory
+$ cargo sonar-scanner              # with the project identified in Cargo.toml
 $ cargo sonar-scanner --dry-run    # resolve the configuration and contact nothing
 $ cargo sonar-scanner --help
 ```
