@@ -4,12 +4,17 @@ Analyse a Cargo project with SonarQube Server or SonarQube Cloud, from the proje
 
 ```console
 $ export SONAR_TOKEN=...
+
+# SonarQube Cloud
 $ cargo sonar-scanner -Dsonar.projectKey=my_project -Dsonar.organization=my_organization
+
+# SonarQube Server
+$ cargo sonar-scanner -Dsonar.projectKey=my_project -Dsonar.host.url=https://sonarqube.example.com
 ```
 
-With no host URL set, the analysis goes to SonarQube Cloud, which requires both a project key and
-`sonar.organization`. Against SonarQube Server, set `sonar.host.url` instead of the organization. A
-project key is always required either way. Put whichever apply in `Cargo.toml` (see
+With no host URL set the analysis goes to SonarQube Cloud, which is why only the first command names
+an organization: that is a SonarQube Cloud concept, and there is nothing to name on a server. A
+project key is required either way. Put the properties that apply in `Cargo.toml` (see
 [Configure](#configure)) and the command comes down to a bare `cargo sonar-scanner`.
 
 Full documentation, including the configuration reference and troubleshooting:
