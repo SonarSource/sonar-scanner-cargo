@@ -1,15 +1,24 @@
 # SonarScanner for Cargo
 
-Run a SonarQube Server or SonarQube Cloud analysis of a Cargo project with one command:
+Analyse a Cargo project with SonarQube Cloud or SonarQube Server, from the project's directory:
 
 ```console
 $ export SONAR_TOKEN=...
-$ cargo sonar-scanner
+
+# SonarQube Cloud
+$ cargo sonar-scanner -Dsonar.projectKey=my_project -Dsonar.organization=my_organization
+
+# SonarQube Server
+$ cargo sonar-scanner -Dsonar.projectKey=my_project -Dsonar.host.url=https://sonarqube.example.com
 ```
 
+For SonarQube Cloud, set your project key and your organization. For SonarQube Server, set your
+project key and your server's URL instead. Put them in `Cargo.toml` (see [Configure](#configure))
+and the command comes down to a bare `cargo sonar-scanner`.
+
 Full documentation, including the configuration reference and troubleshooting:
-**[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
-| **[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
+**[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
+| **[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
 
 ## Install
 
@@ -37,7 +46,7 @@ project-key = "my_project"
 # SonarQube Cloud
 organization = "my_organization"
 
-# SonarQube Server. With no host URL set, the analysis goes to SonarQube Cloud
+# SonarQube Server
 host-url = "https://sonarqube.example.com"
 
 # Cargo build output is not excluded for you
@@ -57,7 +66,7 @@ set it.
 ## Run
 
 ```console
-$ cargo sonar-scanner              # analyse the current directory
+$ cargo sonar-scanner              # with the project identified in Cargo.toml
 $ cargo sonar-scanner --dry-run    # resolve the configuration and contact nothing
 $ cargo sonar-scanner --help
 ```
@@ -69,9 +78,9 @@ its origin, making no network request. That answers most "where did that value c
 on its own.
 
 Beyond that, see the troubleshooting section of the documentation for
-[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)
+[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)
 or
-[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting),
+[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting),
 then the [community forum and help center](https://community.sonarsource.com/).
 
 ## Development
