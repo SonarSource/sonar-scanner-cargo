@@ -1,6 +1,6 @@
 # SonarScanner for Cargo
 
-Analyse a Cargo project with SonarQube Server or SonarQube Cloud, from the project's directory:
+Analyse a Cargo project with SonarQube Cloud or SonarQube Server, from the project's directory:
 
 ```console
 $ export SONAR_TOKEN=...
@@ -12,14 +12,13 @@ $ cargo sonar-scanner -Dsonar.projectKey=my_project -Dsonar.organization=my_orga
 $ cargo sonar-scanner -Dsonar.projectKey=my_project -Dsonar.host.url=https://sonarqube.example.com
 ```
 
-With no host URL set the analysis goes to SonarQube Cloud, which is why only the first command names
-an organization: that is a SonarQube Cloud concept, and there is nothing to name on a server. A
-project key is required either way. Put the properties that apply in `Cargo.toml` (see
-[Configure](#configure)) and the command comes down to a bare `cargo sonar-scanner`.
+For SonarQube Cloud, set your project key and your organization. For SonarQube Server, set your
+project key and your server's URL instead. Put them in `Cargo.toml` (see [Configure](#configure))
+and the command comes down to a bare `cargo sonar-scanner`.
 
 Full documentation, including the configuration reference and troubleshooting:
-**[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
-| **[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
+**[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
+| **[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/)**
 
 ## Install
 
@@ -79,9 +78,9 @@ its origin, making no network request. That answers most "where did that value c
 on its own.
 
 Beyond that, see the troubleshooting section of the documentation for
-[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)
+[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting)
 or
-[SonarQube Cloud](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting),
+[SonarQube Server](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner-for-cargo/#troubleshooting),
 then the [community forum and help center](https://community.sonarsource.com/).
 
 ## Development
