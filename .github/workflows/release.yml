@@ -35,10 +35,7 @@ jobs:
     permissions:
       id-token: write
       contents: write
-    # TODO: pinned to the head of gh-action_release PR #413, which adds publishToCratesIo and the
-    # `{ build }` substitution the binstall metadata depends on. Swap for the release tag that
-    # contains it as soon as that PR is merged and gh-action_release is tagged.
-    uses: SonarSource/gh-action_release/.github/workflows/main.yaml@238284debef0db6907e4f08ddea9529261779bd5
+    uses: SonarSource/gh-action_release/.github/workflows/main.yaml@v7
     with:
       version: ${{ inputs.version }}
       publishToCratesIo: ${{ inputs.publishToCratesIo }}
