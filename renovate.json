@@ -1,0 +1,28 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "local>SonarSource/renovate-config"
+  ],
+  "enabledManagers": [
+    "github-actions",
+    "cargo",
+    "mise",
+    "rust-toolchain"
+  ],
+  "ignorePaths": [
+    "tests/fixtures/**"
+  ],
+  "packageRules": [
+    {
+      "description": "Keep Rust toolchain pins in sync",
+      "matchManagers": [
+        "mise",
+        "rust-toolchain"
+      ],
+      "matchPackageNames": [
+        "rust"
+      ],
+      "groupName": "Rust toolchain"
+    }
+  ]
+}
