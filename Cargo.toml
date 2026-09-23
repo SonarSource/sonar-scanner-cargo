@@ -78,7 +78,7 @@ vendored-openssl = ["dep:openssl"]
 # Only to PEM-encode the client key from the keystore. `ureq` takes the key as DER too, but the
 # `KeyKind` that constructor needs is not re-exported, so PEM is the only reachable route. See
 # src/http.rs.
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
