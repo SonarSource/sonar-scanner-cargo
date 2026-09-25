@@ -289,7 +289,7 @@ x86_64 binary under Rosetta reports `x86_64`). Accepted corner case; `sonar.scan
 | Property | Value | Note |
 |---|---|---|
 | `sonar.projectBaseDir` | current working directory | Set explicitly. Engines ≥ 10.6 default to cwd anyway, but setting it makes the dry-run dump honest and keeps older servers working. Do **not** walk up looking for a workspace root — that would require reading `Cargo.toml`. Running from inside a member crate therefore analyses that member; document it. |
-| `sonar.buildsystem.autoconfig.disabled` | ~~`false`, **user-overridable**~~ **not set** | Engine-side auto-config became opt-in in `SCANENGINE-542`, so sending `false` looked necessary. It is not: the engine's `isBuildSystemAutoConfigurationEnabled` also requires `sonar.scanner.app == "ScannerCLI"`, so with `app = "cargo"` the property changes nothing today, and the bootstrapper does not forward a default it cannot make true. **This becomes a live decision the moment engine M0 lands:** the property's own default in the engine is `true`, so once `"cargo"` is allow-listed, auto-config still stays off unless the engine flips that default (`SCANENGINE-557`) or the bootstrapper starts sending `false` after all. Decide there, not here. |
+| `sonar.scanner.autoconfig.enabled` | `false` only when the Cargo opt-out is set; otherwise omitted | The engine enables Cargo auto-configuration by default. Cargo continues accepting `sonar.buildsystem.autoconfig.disabled=true` from `-D` or `[package.metadata.sonar.buildsystem.autoconfig] disabled = true` and translates it to this engine property. The engine also honors the legacy property for older bootstrapper versions during migration. |
 
 ### 5.13 Truststore and keystore
 
@@ -350,8 +350,8 @@ prints a correct property set for a fixture project with no network.
   about workspaces, targets or `target/`. Property names are *derived* (kebab-case → camelCase, nested tables →
   dotted segments) rather than allow-listed, so there is no per-property maintenance burden and no split
   namespace to explain: `sonar.host.url` is the single alias the convention cannot produce.
-- **`sonar.buildsystem.autoconfig.disabled` is not set** — see §5.12, which records why the value specified
-  there would have been inert.
+- **`sonar.buildsystem.autoconfig.disabled=true` is translated to `sonar.scanner.autoconfig.enabled=false`** —
+  see §5.12. No default is sent; the engine owns Cargo's default-on behavior.
 
 `sonar.scanner.internal.sqVersion` was deferred to M2, where the version check it short-circuits lives.
 

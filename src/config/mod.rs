@@ -52,6 +52,8 @@ pub const SCANNER_ARCH: &str = "sonar.scanner.arch";
 
 /// This bootstrapper's identity, per the scanner naming convention (maven, gradle, cli, npm, …).
 pub const SCANNER_APP: &str = "cargo";
+const LEGACY_AUTO_CONFIGURATION_DISABLED: &str = "sonar.buildsystem.autoconfig.disabled";
+const AUTO_CONFIGURATION_ENABLED: &str = "sonar.scanner.autoconfig.enabled";
 
 /// Name of the project-level configuration file, looked up in `sonar.projectBaseDir`.
 pub const PROJECT_PROPERTIES_FILE: &str = "sonar-project.properties";
@@ -226,6 +228,12 @@ pub fn resolve(cli: &Cli, env: &BTreeMap<String, String>, cwd: &Path, start_time
 
     apply_scanner_properties(&mut properties, &mut origins, start_time_ms);
     apply_defaults(&mut properties, &mut origins, &project_base_dir, &user_home);
+    if properties.get_bool(LEGACY_AUTO_CONFIGURATION_DISABLED) {
+        // The engine reads this property; keep the Cargo name as a user-facing alias.
+        let origin = origins.get(LEGACY_AUTO_CONFIGURATION_DISABLED).copied().unwrap_or(Source::Bootstrapper);
+        properties.set(AUTO_CONFIGURATION_ENABLED, "false");
+        origins.insert(AUTO_CONFIGURATION_ENABLED.to_string(), origin);
+    }
     guard_credentials(&properties);
 
     Ok(Configuration { properties, origins, user_home, project_base_dir, loaded_files })
@@ -515,16 +523,32 @@ mod tests {
         assert_eq!(config.properties.get(BOOTSTRAP_START_TIME), Some("1700000000000"));
     }
 
-    /// The engine owns the default of every property it interprets. The bootstrapper only forwards
-    /// what the user actually set.
     #[test]
-    fn build_system_auto_configuration_is_left_to_the_engine() {
+    fn cargo_opt_out_is_forwarded_to_the_engine() {
         let dir = tempdir();
         let config = resolve_with(&[], &[], dir.path());
-        assert!(!config.properties.contains("sonar.buildsystem.autoconfig.disabled"));
+        assert!(!config.properties.contains(LEGACY_AUTO_CONFIGURATION_DISABLED));
+        assert!(!config.properties.contains(AUTO_CONFIGURATION_ENABLED));
 
         let config = resolve_with(&["-Dsonar.buildsystem.autoconfig.disabled=true"], &[], dir.path());
-        assert_eq!(config.properties.get("sonar.buildsystem.autoconfig.disabled"), Some("true"));
+        assert_eq!(config.properties.get(LEGACY_AUTO_CONFIGURATION_DISABLED), Some("true"));
+        assert_eq!(config.properties.get(AUTO_CONFIGURATION_ENABLED), Some("false"));
+        assert_eq!(config.origin_of(AUTO_CONFIGURATION_ENABLED), Source::CommandLine);
+    }
+
+    #[test]
+    fn manifest_cargo_opt_out_is_forwarded_to_the_engine() {
+        let dir = tempdir();
+        write(
+            dir.path().join(manifest::MANIFEST_FILE),
+            "[package]\nname = \"test-crate\"\nversion = \"0.1.0\"\n\
+             [package.metadata.sonar.buildsystem.autoconfig]\ndisabled = true\n",
+        );
+
+        let config = resolve_with(&[], &[], dir.path());
+        assert_eq!(config.properties.get(LEGACY_AUTO_CONFIGURATION_DISABLED), Some("true"));
+        assert_eq!(config.properties.get(AUTO_CONFIGURATION_ENABLED), Some("false"));
+        assert_eq!(config.origin_of(AUTO_CONFIGURATION_ENABLED), Source::Manifest);
     }
 
     // Minimal temp-dir helper: the crate has no dev-dependency on `tempfile` yet.
