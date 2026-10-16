@@ -56,7 +56,7 @@ jobs:
 
       - name: Check the pinned Rust version is consistent
         run: |
-          mise_version=$(sed -n 's/^rust *= *"\(.*\)"/\1/p' mise.toml)
+          mise_version=$(sed -n 's/^rust *= *{ *version *= *"\([^"]*\)".*/\1/p' mise.toml)
           toolchain_version=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
           if [[ "$mise_version" != "$toolchain_version" ]]; then
             echo "::error::mise.toml pins Rust $mise_version but rust-toolchain.toml pins $toolchain_version"
