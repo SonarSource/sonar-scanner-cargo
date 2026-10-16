@@ -112,7 +112,7 @@ ureq = { version = "3", default-features = false, features = ["native-tls", "gzi
 url = "2"
 # Deflate is the only method a JRE archive uses; the rest of the compression zoo stays out of the
 # binary, and out of the dependency audit.
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # Not called from any code: depending on it is how the `vendored` feature reaches the `openssl-sys`
 # that `native-tls` pulls in, since Cargo unifies features across the graph. Linux-only, because it
