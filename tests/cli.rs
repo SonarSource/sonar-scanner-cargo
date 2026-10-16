@@ -51,10 +51,14 @@ impl Run {
     }
 }
 
-/// Run the binary in `cwd` with exactly the given environment — nothing inherited.
+/// Run the binary in `cwd` with exactly the given environment — nothing inherited, except where
+/// `cargo llvm-cov` wants the coverage profile written, without which the binary's coverage is lost.
 fn run(cwd: &Path, env: &[(&str, &str)], args: &[&str]) -> Run {
     let mut command = Command::new(BIN);
     command.current_dir(cwd).env_clear().env("HOME", cwd).args(args);
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     for (name, value) in env {
         command.env(name, value);
     }

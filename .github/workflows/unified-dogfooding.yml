@@ -60,6 +60,11 @@ jobs:
       - name: Route crates.io through Repox
         run: .github/scripts/route-crates-io-through-repox.sh
 
+      - name: Test with coverage
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo llvm-cov --locked --remap-path-prefix --lcov --output-path lcov.info
+
       # ci-github-actions has no build-* action for Cargo yet (only Maven, Gradle, npm, Yarn and
       # Poetry), so unlike those languages this job drives the three shadow scans directly with
       # the scanner this repository builds, `cargo sonar-scanner`, rather than through a reusable
