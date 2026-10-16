@@ -294,7 +294,7 @@ jobs:
   # tests run here rather than in `build`, so that the coverage report is produced where it is read.
   sonar:
     runs-on: sonar-xs
-    name: SonarQube Analysis
+    name: Tests and SonarQube analysis
     permissions:
       id-token: write
       contents: read
