@@ -89,7 +89,7 @@ log = "0.4"
 # Reads `sonar.scanner.truststorePath` and `keystorePath`, which the bootstrapping contract requires
 # the bootstrapper to honour for its own calls, not merely forward. Pure Rust, so it costs the
 # cross-compiled targets nothing.
-p12-keystore = "0.3"
+p12-keystore = "0.4"
 # A truststore is additive — "in addition to OS + built-in certificates" — but `ureq` cannot express
 # "the platform verifier and also these": naming roots turns the built-in ones off. So the platform's
 # roots are enumerated here and passed alongside the truststore's. See src/tls.rs.
