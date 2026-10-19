@@ -116,6 +116,20 @@ jobs:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
         run: cargo build --locked
 
+      # Produces the report that sonar.rust.lcov.reportPaths points at.
+      - name: Test with coverage
+        env:
+          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
+        run: cargo llvm-cov --locked --remap-path-prefix --lcov --output-path lcov.info
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage
+          path: lcov.info
+          if-no-files-found: error
+          retention-days: 7
+
       # The MSRV is a promise to anyone running `cargo install`, so compile it rather than assert it.
       # The version comes from Cargo.toml so there is only one place to change it.
       - name: Verify the declared MSRV
@@ -290,11 +304,11 @@ jobs:
   # scan, which is what the organisation-wide `check-sca` workflow waits for — it polls the
   # project's default branch and the pull request, so a PR analysis is enough to satisfy it.
   #
-  # Deliberately independent of `build`: a failing lint should not hide the analysis result. The
-  # tests run here rather than in `build`, so that the coverage report is produced where it is read.
+  # Tests run in `build`; this job imports their coverage report before scanning.
   sonar:
+    needs: build
     runs-on: sonar-xs
-    name: Tests and SonarQube analysis
+    name: SonarQube Analysis
     permissions:
       id-token: write
       contents: read
@@ -306,28 +320,18 @@ jobs:
           # Full history, so that SCM blame and new-code detection work.
           fetch-depth: 0
 
-      - name: Set up tools
-        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+      - name: Download coverage report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          version: 2026.7.7
+          name: coverage
 
       - name: Vault
         id: secrets
         uses: SonarSource/vault-action-wrapper@0a3114fe1230b784c35b53b099f9ab1f1e538cc7 # 3.5.0
         with:
           secrets: |
-            development/artifactory/token/{REPO_OWNER_NAME_DASH}-public-reader access_token | ARTIFACTORY_ACCESS_TOKEN;
             development/kv/data/next url | SONAR_HOST_URL;
             development/kv/data/next token | SONAR_TOKEN;
-
-      - name: Route crates.io through Repox
-        run: .github/scripts/route-crates-io-through-repox.sh
-
-      # Produces the report that sonar.rust.lcov.reportPaths points at.
-      - name: Test with coverage
-        env:
-          CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
-        run: cargo llvm-cov --locked --remap-path-prefix --lcov --output-path lcov.info
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
@@ -349,7 +353,7 @@ jobs:
   #
   # Crate versions are immutable, so each build takes its own, `<version>-<build number>`.
   deploy:
-    needs: [build, binaries, get-build-number]
+    needs: [build, binaries, get-build-number, sonar]
     # Forks are excluded: they cannot reach Vault, so there is no deploy token for them.
     if: >-
       github.ref == 'refs/heads/master'
