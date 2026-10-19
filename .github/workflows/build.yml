@@ -353,7 +353,7 @@ jobs:
   #
   # Crate versions are immutable, so each build takes its own, `<version>-<build number>`.
   deploy:
-    needs: [build, binaries, get-build-number, sonar]
+    needs: [build, binaries, get-build-number]
     # Forks are excluded: they cannot reach Vault, so there is no deploy token for them.
     if: >-
       github.ref == 'refs/heads/master'
