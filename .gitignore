@@ -1,4 +1,6 @@
 /target
+/lcov.info
+*.profraw
 /.cargo/config.toml
 /.idea/
 # Written by CI to provision the JFrog CLI.

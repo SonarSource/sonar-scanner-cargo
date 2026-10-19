@@ -56,7 +56,7 @@ jobs:
 
       - name: Check the pinned Rust version is consistent
         run: |
-          mise_version=$(sed -n 's/^rust *= *"\(.*\)"/\1/p' mise.toml)
+          mise_version=$(sed -n 's/^rust *= *{ *version *= *"\([^"]*\)".*/\1/p' mise.toml)
           toolchain_version=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
           if [[ "$mise_version" != "$toolchain_version" ]]; then
             echo "::error::mise.toml pins Rust $mise_version but rust-toolchain.toml pins $toolchain_version"
@@ -116,10 +116,19 @@ jobs:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
         run: cargo build --locked
 
-      - name: Test
+      # Produces the report that sonar.rust.lcov.reportPaths points at.
+      - name: Test with coverage
         env:
           CARGO_REGISTRIES_REPOX_TOKEN: Bearer ${{ fromJSON(steps.secrets.outputs.vault).ARTIFACTORY_ACCESS_TOKEN }}
-        run: cargo test --locked
+        run: cargo llvm-cov --locked --remap-path-prefix --lcov --output-path lcov.info
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage
+          path: lcov.info
+          if-no-files-found: error
+          retention-days: 7
 
       # The MSRV is a promise to anyone running `cargo install`, so compile it rather than assert it.
       # The version comes from Cargo.toml so there is only one place to change it.
@@ -295,9 +304,9 @@ jobs:
   # scan, which is what the organisation-wide `check-sca` workflow waits for — it polls the
   # project's default branch and the pull request, so a PR analysis is enough to satisfy it.
   #
-  # Deliberately independent of `build`: a failing lint should not hide the analysis result, and
-  # the scan needs no Rust toolchain — the analyzers ship with the scanner engine.
+  # Tests run in `build`; this job imports their coverage report before scanning.
   sonar:
+    needs: build
     runs-on: sonar-xs
     name: SonarQube Analysis
     permissions:
@@ -310,6 +319,11 @@ jobs:
         with:
           # Full history, so that SCM blame and new-code detection work.
           fetch-depth: 0
+
+      - name: Download coverage report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage
 
       - name: Vault
         id: secrets
