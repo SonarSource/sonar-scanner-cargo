@@ -244,11 +244,9 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            format!(
-                "SonarQube Server 9.9.4.87374 is not supported. This scanner requires 10.6 or later. To analyse \
-                 with an older server, use the SonarScanner CLI: \
-                 https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
-            )
+            "SonarQube Server 9.9.4.87374 is not supported. This scanner requires 10.6 or later. To analyse \
+             with an older server, use the SonarScanner CLI: \
+             https://docs.sonarsource.com/sonarqube-server/latest/analyzing-source-code/scanners/sonarscanner/"
         );
     }
 

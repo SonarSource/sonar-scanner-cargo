@@ -76,13 +76,9 @@ fn systematic_key(name: &str) -> Option<String> {
             key.push_str(&lower);
         } else {
             let mut chars = lower.chars();
-            match chars.next() {
-                Some(first) => {
-                    key.extend(first.to_uppercase());
-                    key.push_str(chars.as_str());
-                }
-                None => return None,
-            }
+            let first = chars.next()?;
+            key.extend(first.to_uppercase());
+            key.push_str(chars.as_str());
         }
     }
     Some(key)
