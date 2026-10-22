@@ -23,6 +23,7 @@ jobs:
     name: Get build number
     permissions:
       id-token: write
+      contents: write
     outputs:
       BUILD_NUMBER: ${{ steps.get-build-number.outputs.BUILD_NUMBER }}
     steps:
