@@ -3,5 +3,5 @@
 # rust-toolchain.toml stays the source of truth for rustup and for IDEs, mise is what
 # provisions the toolchain on the minimal CI runners. mise overrides the toolchain through
 # RUSTUP_TOOLCHAIN, so rustup ignores rust-toolchain.toml and its components have to be repeated.
-rust = { version = "1.96.0", components = "rustfmt,clippy,llvm-tools" }
+rust = { version = "1.99.1", components = "rustfmt,clippy,llvm-tools" }
 "aqua:taiki-e/cargo-llvm-cov" = "0.9.1"
