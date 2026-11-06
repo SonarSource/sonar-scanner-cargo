@@ -31,6 +31,7 @@ const SONARCLOUD_URL: &str = "sonar.scanner.sonarcloudUrl";
 const CLOUD_REGIONS: &[CloudRegion] = &[
     CloudRegion { region: "", host_url: "https://sonarcloud.io", api_base_url: "https://api.sonarcloud.io" },
     CloudRegion { region: "us", host_url: "https://sonarqube.us", api_base_url: "https://api.sonarqube.us" },
+    CloudRegion { region: "au", host_url: "https://sonarqube.au", api_base_url: "https://api.sonarqube.au" },
 ];
 
 struct CloudRegion {
@@ -67,7 +68,7 @@ pub enum EndpointError {
     #[error(
         "Invalid region '{0}'. Valid regions are: {valid}. \
          Please check the '{region}' property or the 'SONAR_REGION' environment variable.",
-        valid = "'us'",
+        valid = valid_regions(),
         region = REGION
     )]
     UnknownRegion(String),
@@ -170,6 +171,16 @@ fn cloud_region(region: &str) -> Result<&'static CloudRegion, EndpointError> {
         .ok_or_else(|| EndpointError::UnknownRegion(region.to_string()))
 }
 
+/// The regions a user may set explicitly, quoted for a user-facing message (e.g. `'us', 'au'`).
+fn valid_regions() -> String {
+    CLOUD_REGIONS
+        .iter()
+        .filter(|cloud| !cloud.region.is_empty())
+        .map(|cloud| format!("'{}'", cloud.region))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn strip_trailing_slashes(url: &str) -> &str {
     url.trim().trim_end_matches('/')
 }
@@ -221,6 +232,18 @@ mod tests {
     }
 
     #[test]
+    fn resolves_the_au_region() {
+        for value in ["au", "AU", " Au "] {
+            let endpoint = resolved(&[(REGION, value)]);
+            assert_eq!(endpoint.host_url, "https://sonarqube.au");
+            assert_eq!(endpoint.api_base_url, "https://api.sonarqube.au");
+            assert!(endpoint.is_cloud);
+            assert_eq!(endpoint.region, "au");
+            assert_eq!(endpoint.product(), "SonarQube Cloud [au]");
+        }
+    }
+
+    #[test]
     fn recognises_cloud_urls_written_by_hand() {
         for url in [
             "https://sonarcloud.io",
@@ -247,6 +270,27 @@ mod tests {
     fn a_consistent_region_and_cloud_url_are_accepted() {
         let endpoint = resolved(&[(HOST_URL, "https://sonarqube.us"), (REGION, "us")]);
         assert_eq!(endpoint.region, "us");
+
+        let endpoint = resolved(&[(HOST_URL, "https://sonarqube.au"), (REGION, "au")]);
+        assert_eq!(endpoint.region, "au");
+    }
+
+    #[test]
+    fn recognises_the_au_cloud_url() {
+        let endpoint = resolved(&[(HOST_URL, "https://sonarqube.au/")]);
+        assert!(endpoint.is_cloud);
+        assert_eq!(endpoint.region, "au");
+        assert_eq!(endpoint.host_url, "https://sonarqube.au");
+        assert_eq!(endpoint.api_base_url, "https://api.sonarqube.au");
+    }
+
+    #[test]
+    fn rejects_a_region_that_contradicts_another_regional_cloud_url() {
+        let error = resolve(&properties(&[(HOST_URL, "https://sonarqube.us"), (REGION, "au")])).unwrap_err();
+        assert_eq!(
+            error,
+            EndpointError::RegionMismatch { region: "au".to_string(), host_url: "https://sonarqube.us".to_string() }
+        );
     }
 
     #[test]
@@ -287,7 +331,7 @@ mod tests {
     fn rejects_an_unknown_region() {
         let error = resolve(&properties(&[(REGION, "eu")])).unwrap_err();
         assert_eq!(error, EndpointError::UnknownRegion("eu".to_string()));
-        assert!(error.to_string().contains("Valid regions are: 'us'"));
+        assert!(error.to_string().contains("Valid regions are: 'us', 'au'."));
 
         assert!(resolve(&properties(&[(HOST_URL, "https://sq.example.com"), (REGION, "eu")])).is_err());
     }

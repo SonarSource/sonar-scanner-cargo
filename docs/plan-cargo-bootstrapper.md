@@ -130,7 +130,7 @@ Deliberately **not** async, and **not** `reqwest` — see design §8 "Performanc
 
 ### 5.2 Properties the bootstrapper consumes
 
-`sonar.host.url` (`SONAR_HOST_URL`) · `sonar.region` (`SONAR_REGION`, value `us`) ·
+`sonar.host.url` (`SONAR_HOST_URL`) · `sonar.region` (`SONAR_REGION`, values `us`, `au`) ·
 `sonar.scanner.sonarcloudUrl` · `sonar.scanner.apiBaseUrl` · `sonar.token` (`SONAR_TOKEN`) ·
 `sonar.userHome` (`SONAR_USER_HOME`, default `~/.sonar`) ·
 `sonar.scanner.os` / `sonar.scanner.arch` (`SONAR_SCANNER_OS` / `_ARCH`) ·
@@ -169,6 +169,8 @@ Example: `SONAR_SCANNER_PROXY_PORT=123` → `sonar.scanner.proxyPort=123`.
 - `sonar.region=us` ⇒ host `https://sonarqube.us`, API base `https://api.sonarqube.us` (region is case-insensitive).
 - `sonar.host.url` matching sonarcloud.io (with/without trailing slash, with/without `www.`) ⇒ equivalent to Cloud global.
 - `sonar.host.url` matching sonarqube.us likewise ⇒ equivalent to `sonar.region=us`.
+- `sonar.region=au` and `sonar.host.url` matching sonarqube.au behave the same way, with host
+  `https://sonarqube.au` and API base `https://api.sonarqube.au`.
 - Any other `sonar.host.url` ⇒ SonarQube Server, API base `<host>/api/v2`.
 - Inconsistent combinations (e.g. `sonar.host.url=https://sonarcloud.io` **and** `sonar.region=us`) ⇒ **fail with a clear message**, never guess.
 - `sonar.host.url` must be passed to the engine even for Cloud.
