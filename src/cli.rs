@@ -54,7 +54,7 @@ pub struct Cli {
     #[arg(long, value_name = "URL")]
     pub sonar_host_url: Option<String>,
 
-    /// SonarQube Cloud region (sonar.region), e.g. `us`
+    /// SonarQube Cloud region (sonar.region): `us` or `au`
     #[arg(long, value_name = "REGION")]
     pub sonar_region: Option<String>,
 
