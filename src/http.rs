@@ -210,12 +210,11 @@ impl HttpClient {
             .max_redirects(0)
             .max_redirects_will_error(false)
             .timeout_connect(Some(seconds(properties, CONNECT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT)))
-            // Two bounds, because `ureq` keeps the head deadline in force while the body is read: the
-            // first is the wait for the response head *and* the whole exchange, the second is a wait
-            // per read, recomputed as the body arrives. An artifact download lifts the first one, see
-            // [`Transfer`].
+            // Two bounds: the first is the wait for the response head, the second is a wait per read,
+            // restarted as the body arrives. `timeout_recv_body` is not that: since ureq 3.5 it is a
+            // budget for the whole body. An artifact download lifts the first one, see [`Transfer`].
             .timeout_recv_response(Some(socket_timeout))
-            .timeout_recv_body(Some(socket_timeout))
+            .timeout_per_read(Some(socket_timeout))
             .timeout_global(optional_seconds(properties, RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT))
             .tls_config(tls_config(properties)?);
         // Left alone, the agent picks the proxy up from the environment; only override it when the
