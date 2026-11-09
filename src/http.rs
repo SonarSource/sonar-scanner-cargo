@@ -47,8 +47,8 @@ use crate::endpoint::Endpoint;
 
 /// Seconds to wait for the TCP connection and the TLS handshake.
 pub const CONNECT_TIMEOUT: &str = "sonar.scanner.connectTimeout";
-/// Seconds to wait for the response head once the request has been sent, and for the body of
-/// everything but a download.
+/// Seconds to wait for the response head and each body read, and for the total time to read a
+/// metadata body.
 pub const SOCKET_TIMEOUT: &str = "sonar.scanner.socketTimeout";
 /// Seconds allowed for a whole call, body included. `0` means unlimited.
 pub const RESPONSE_TIMEOUT: &str = "sonar.scanner.responseTimeout";
@@ -81,12 +81,12 @@ const OCTET_STREAM: &str = "application/octet-stream";
 /// What a call is fetching, which decides how its response is bounded in time.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Transfer {
-    /// An API response of a few hundred bytes, for which the socket timeout can bound the whole
-    /// exchange.
+    /// An API response of a few hundred bytes, for which the socket timeout bounds the response
+    /// head, each read, and the body as a whole.
     Metadata,
-    /// An artifact, where the socket timeout bounds each read but not the transfer as a whole. Tens
-    /// of megabytes over a slow link legitimately take longer than any per-call budget, and only
-    /// `sonar.scanner.responseTimeout` puts a ceiling on the total.
+    /// An artifact, whose response-head and whole-body socket-timeout bounds are lifted while the
+    /// per-read timeout remains. Tens of megabytes over a slow link legitimately take longer than
+    /// any per-call budget, and only `sonar.scanner.responseTimeout` puts a ceiling on the total.
     Artifact,
 }
 
@@ -210,10 +210,11 @@ impl HttpClient {
             .max_redirects(0)
             .max_redirects_will_error(false)
             .timeout_connect(Some(seconds(properties, CONNECT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT)))
-            // Two bounds: the first is the wait for the response head, the second is a wait per read,
-            // restarted as the body arrives. `timeout_recv_body` is not that: since ureq 3.5 it is a
-            // budget for the whole body. An artifact download lifts the first one, see [`Transfer`].
+            // The response-head and per-read bounds are separate from `timeout_recv_body`, which is
+            // a budget for the whole body. Artifact downloads lift the response-head and whole-body
+            // bounds while retaining the per-read timeout; see [`Transfer`].
             .timeout_recv_response(Some(socket_timeout))
+            .timeout_recv_body(Some(socket_timeout))
             .timeout_per_read(Some(socket_timeout))
             .timeout_global(optional_seconds(properties, RESPONSE_TIMEOUT, DEFAULT_RESPONSE_TIMEOUT))
             .tls_config(tls_config(properties)?);
@@ -316,10 +317,10 @@ impl HttpClient {
     fn call(&self, url: &str, accept: Option<&str>, transfer: Transfer) -> Result<Response<Body>> {
         let mut request = self.agent.get(url);
         if transfer == Transfer::Artifact {
-            // Left in place, the head deadline would cap the transfer as a whole at the budget of a
-            // metadata call. Dropping it leaves the per-read timeout to catch a peer that goes quiet,
-            // and the head of this one call unbounded unless 'sonar.scanner.responseTimeout' is set.
-            request = request.config().timeout_recv_response(None).build();
+            // Lift the response-head and whole-body socket-timeout bounds for a download. The
+            // per-read timeout still catches a peer that goes quiet, and
+            // `sonar.scanner.responseTimeout` can still bound the whole call.
+            request = request.config().timeout_recv_response(None).timeout_recv_body(None).build();
         }
         if let Some(accept) = accept {
             request = request.header("Accept", accept);
@@ -636,6 +637,18 @@ mod tests {
         let error = client.get_json::<serde_json::Value>(&server.url("/api/v2/analysis/engine")).unwrap_err();
 
         assert!(error.to_string().contains("as JSON"), "{error}");
+    }
+
+    /// Progress within the per-read timeout does not let a metadata body exceed its whole-body
+    /// budget.
+    #[test]
+    fn bounds_the_total_time_for_a_metadata_body() {
+        let server = TestServer::always(TestResponse::json("true").paced(Duration::from_millis(400)));
+        let client = client_with(&server, &[(SOCKET_TIMEOUT, "1")]);
+
+        let error = client.get_json::<bool>(&server.url("/api/v2/analysis/engine")).unwrap_err();
+
+        assert!(error.to_string().contains("Failed to read the response"), "{error}");
     }
 
     /// A peer that answers the head and then goes quiet must not hang the analysis. One second is the
