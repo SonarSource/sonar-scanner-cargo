@@ -2,8 +2,8 @@
 name = "cargo-sonar-scanner"
 version = "1.1.0"
 edition = "2024"
-# Verified by CI, not asserted: `let` chains put the floor at 1.88.
-rust-version = "1.88"
+# Verified by CI: zip requires Rust 1.89.
+rust-version = "1.89"
 description = "Run SonarQube Server and SonarQube Cloud analysis from Cargo."
 # An SPDX expression rather than `license-file`, so that crates.io, docs.rs and every license
 # scanner downstream can read it without a human in the loop — which is the point of the move away
@@ -112,7 +112,7 @@ ureq = { version = "3.5.1", default-features = false, features = ["native-tls", 
 url = "2"
 # Deflate is the only method a JRE archive uses; the rest of the compression zoo stays out of the
 # binary, and out of the dependency audit.
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9.8.2", default-features = false, features = ["deflate"] }
 
 # Not called from any code: depending on it is how the `vendored` feature reaches the `openssl-sys`
 # that `native-tls` pulls in, since Cargo unifies features across the graph. Linux-only, because it

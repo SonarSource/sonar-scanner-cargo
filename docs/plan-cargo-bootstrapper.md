@@ -328,7 +328,7 @@ clap CLI, license headers, `rustfmt.toml`, `clippy` in CI. Fill in `.github/work
 
 **Exit:** `cargo install --path .` then `cargo sonar-scanner --help` works.
 
-*Delivered.* MSRV is 1.88 (`let` chains), compiled by CI so it is a verified claim.
+*Delivered.* MSRV is 1.89 because zip 9.8.2 requires it. CI compiles this version to verify compatibility.
 
 ### M1 — Configuration and connection resolution, fully offline ✅ done
 
