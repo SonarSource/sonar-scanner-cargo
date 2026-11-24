@@ -167,7 +167,7 @@ fn unzip(archive: &Path, into: &Path) -> Result<(), ArchiveError> {
         let Some(relative) = entry.enclosed_name() else {
             warn!(
                 "Skipping {} from {}: it would be extracted outside the target directory",
-                entry.name(),
+                entry.name().unwrap_or_else(|_| "<invalid name>".into()),
                 archive.display()
             );
             continue;
